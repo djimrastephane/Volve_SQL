@@ -111,7 +111,15 @@ ORDER BY peak_oil_volume DESC;
 
 
 -- -----------------------------------------------------------------------------
--- A5. How quickly did oil production decline after peak?
+-- A5. How did production compare with peak at 30, 90, and 365 days after peak?
+--
+-- Deliberately not called "decline rate": this is a point-in-time
+-- comparison against each well's own peak day, not decline-curve analysis.
+-- A single shutdown day landing exactly on a checkpoint reads as a 100%
+-- change even though it may reflect one day of downtime, not reservoir
+-- deterioration - pct_decline_* columns keep their name for brevity, but
+-- "% below peak at this checkpoint" is the accurate reading, not "decline
+-- rate since peak."
 --
 -- Compares peak daily oil volume (from A4's method) against production
 -- exactly 30/90/365 days later. A direct date match, not a "nearest

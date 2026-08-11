@@ -315,13 +315,21 @@ window function.
 wellbores, and peak dates cluster in each well's early producing life —
 consistent with typical reservoir decline behavior.
 
-**A5 — How much did each wellbore decline from its peak, at 30/90/365 days?**
-*SQL:* `LAG()`/self-join against each wellbore's peak-date row, `PARTITION
-BY npd_well_bore_code ORDER BY production_date`.
-*Finding:* Decline percentages differ substantially by wellbore over the
-same windows, ruling out a single field-wide decline curve.
-*Interpretation:* well-level decline behavior needs well-level analysis —
-a field average would mask this spread.
+**A5 — How did each wellbore's production compare with its own peak at
+30/90/365 days after peak?**
+*SQL:* `ROW_NUMBER() OVER (PARTITION BY npd_well_bore_code ORDER BY
+bore_oil_vol DESC)` to find each well's peak day, then `LEFT JOIN` back to
+the exact calendar dates `peak_date + 30/90/365`.
+*Finding:* The gap at the +90-day checkpoint is wide — from 12.8% below
+peak (15/9-F-12) to 70.0% below peak (15/9-F-1 C) — with no single pattern
+across wells.
+*Interpretation:* This is a point-in-time comparison to each well's own
+peak day, not decline-curve analysis — checkpoints use an exact
+calendar-date match, not a smoothed trend, so a single shutdown landing
+exactly on a checkpoint can read as a large change unrelated to reservoir
+performance. `app/`'s Well Comparison page pairs this with the normalized
+production profile (the fuller trajectory) so a surprising checkpoint value
+can be checked in context rather than taken at face value.
 
 **A6 — How did field-wide water-oil ratio trend over time?**
 *SQL:* `SUM(water)/NULLIF(SUM(oil),0)` on `vw_field_monthly_summary`,

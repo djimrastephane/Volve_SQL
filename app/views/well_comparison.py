@@ -3,6 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pandas as pd
 import plotly.express as px
 import streamlit as st
 
@@ -106,22 +107,63 @@ if not water.empty:
 else:
     st.caption("No monthly data for the selected wells.")
 
-st.subheader("Production decline")
-st.caption("% decline in daily oil, 30 / 90 / 365 days after each well's peak  -  A5")
+st.subheader("Production change from peak")
+st.caption(
+    "How did production compare with peak at 30, 90, and 365 days after "
+    "peak?  -  A5. This is a point-in-time comparison to each well's own "
+    "peak day, not decline-curve analysis: checkpoints use an exact "
+    "calendar-date match (peak date + N days), not a smoothed trend, so a "
+    "single shutdown landing exactly on a checkpoint can show as a 100% "
+    "drop that has nothing to do with reservoir performance. The "
+    "normalized profile above shows the fuller trajectory for context "
+    "when a checkpoint value looks surprising - hover a bar below for the "
+    "exact peak and checkpoint volumes behind each percentage."
+)
 decl = q.decline(selected_codes)
 if not decl.empty:
     st.dataframe(
-        decl[["wellbore_name", "peak_date", "peak_volume",
-              "pct_decline_30_days", "pct_decline_90_days", "pct_decline_365_days"]],
+        decl.rename(columns={
+            "wellbore_name": "Well", "peak_date": "Peak date", "peak_volume": "Peak oil (Sm³/d)",
+            "oil_30_days_after_peak": "Oil +30d (Sm³/d)", "pct_decline_30_days": "% below peak +30d",
+            "oil_90_days_after_peak": "Oil +90d (Sm³/d)", "pct_decline_90_days": "% below peak +90d",
+            "oil_365_days_after_peak": "Oil +365d (Sm³/d)", "pct_decline_365_days": "% below peak +365d",
+        }),
         width="stretch", hide_index=True,
     )
-    decline_long = decl.melt(
-        id_vars="wellbore_name",
-        value_vars=["pct_decline_30_days", "pct_decline_90_days", "pct_decline_365_days"],
-        var_name="window", value_name="pct_decline",
+
+    checkpoints = [
+        ("+30 days", "oil_30_days_after_peak", "pct_decline_30_days"),
+        ("+90 days", "oil_90_days_after_peak", "pct_decline_90_days"),
+        ("+365 days", "oil_365_days_after_peak", "pct_decline_365_days"),
+    ]
+    decline_long = pd.DataFrame([
+        {
+            "wellbore_name": row["wellbore_name"],
+            "peak_date": str(row["peak_date"]),
+            "peak_volume": row["peak_volume"],
+            "checkpoint": label,
+            "oil_at_checkpoint": row[oil_col],
+            "pct_below_peak": row[pct_col],
+        }
+        for _, row in decl.iterrows()
+        for label, oil_col, pct_col in checkpoints
+    ])
+
+    fig4 = px.bar(
+        decline_long, x="wellbore_name", y="pct_below_peak", color="checkpoint", barmode="group",
+        custom_data=["peak_volume", "peak_date", "checkpoint", "oil_at_checkpoint"],
     )
-    fig4 = px.bar(decline_long, x="wellbore_name", y="pct_decline", color="window", barmode="group")
-    fig4.update_layout(yaxis_title="% decline from peak", xaxis_title=None)
+    fig4.update_traces(
+        hovertemplate=(
+            "<b>%{x}</b><br>"
+            "Peak oil: %{customdata[0]:,.0f} Sm³/d<br>"
+            "Peak date: %{customdata[1]}<br>"
+            "Checkpoint: %{customdata[2]}<br>"
+            "Oil at checkpoint: %{customdata[3]:,.0f} Sm³/d<br>"
+            "Change from peak: %{y:.1f}%<extra></extra>"
+        )
+    )
+    fig4.update_layout(yaxis_title="% below peak", xaxis_title=None, legend_title_text="Checkpoint")
     st.plotly_chart(fig4, width="stretch")
 else:
     st.caption("No oil-producing history for the selected wells.")

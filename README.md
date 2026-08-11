@@ -125,34 +125,56 @@ properly rather than by guesswork.
 
 ## 5. Architecture
 
+```mermaid
+flowchart TD
+    A["Equinor Volve Excel workbook<br/>data/raw/Volve production data.xlsx<br/>(read-only)"]
+    B["src/load_postgres.py<br/>Python ETL: extract + light typing only"]
+    A --> B
+
+    subgraph RAW["raw schema"]
+        C1["raw.daily_production_source"]
+        C2["raw.monthly_production_source"]
+    end
+    B --> C1
+    B --> C2
+
+    D["SQL transform<br/>sql/02_create_tables.sql target,<br/>populated by load_postgres.py's transform_core step"]
+    C1 --> D
+    C2 --> D
+
+    subgraph CORE["core schema"]
+        E1["core.wellbore"]
+        E2["core.daily_production"]
+        E3["core.monthly_reference"]
+    end
+    D --> E1
+    D --> E2
+    D --> E3
+
+    F["analytics.vw_* views<br/>sql/05_views.sql<br/>joins/aggregations an analyst would otherwise repeat"]
+    E1 --> F
+    E2 --> F
+    E3 --> F
+
+    G["sql/06_analysis.sql<br/>12 engineering questions, A1-A12<br/>full DB access"]
+    H["app/<br/>sql/07_app_role.sql: volve_app role,<br/>SELECT on analytics only - no core/raw"]
+    F --> G
+    F --> H
+
+    I["Dashboard<br/>4 pages - queries.py mirrors 06_analysis.sql's<br/>logic independently (app has no access to core)"]
+    J["Ask the Data<br/>local LLM via Ollama -> SQL -> analytics<br/>generated SQL always shown"]
+    H --> I
+    H --> J
 ```
-Equinor Volve Excel workbook (data/raw/Volve production data.xlsx, read-only)
-                    |
-                    v
-         src/load_postgres.py  (Python ETL: extract + light typing only)
-                    |
-                    v
-      raw.daily_production_source / raw.monthly_production_source
-        (schema mirrors the source sheets, nothing dropped or reshaped)
-                    |
-                    v   SQL transform (sql/02_create_tables.sql target,
-                    |    populated by load_postgres.py's transform_core step)
-                    v
-      core.wellbore / core.daily_production / core.monthly_reference
-        (typed, constrained, one validated grain per table)
-                    |
-                    v
-      analytics.vw_* views (sql/05_views.sql)
-        (joins and aggregations an analyst would otherwise repeat)
-                    |
-                    v
-      sql/06_analysis.sql  -  12 engineering questions, A1-A12
-                    |
-                    v
-      app/  -  Streamlit dashboard, connected only to analytics
-        (sql/07_app_role.sql: a dedicated volve_app role with SELECT on
-         analytics only - no grant on core or raw - see app/README.md)
-```
+
+`sql/06_analysis.sql` and `app/` are parallel, independent consumers of
+`analytics.*` - not a sequential pipeline. `app/queries.py` re-derives the
+same engineering logic (A1-A12) against the analytics views on its own,
+because `app/`'s database role has no grant on `core` at all and so
+literally cannot depend on the SQL walkthrough's queries even if it wanted
+to; see `app/README.md`'s note on this. Both paths sitting side by side is
+itself evidence the `analytics` layer carries enough information for real
+analysis, not just for the SQL demonstration.
 
 `raw` preserves the source as faithfully as typing allows; `core` is where
 this project's validated rules (grain, keys, constraints) actually live;

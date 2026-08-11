@@ -127,44 +127,21 @@ properly rather than by guesswork.
 
 ```mermaid
 flowchart TD
-    A["Equinor Volve Excel workbook<br/>data/raw/Volve production data.xlsx<br/>(read-only)"]
-    B["src/load_postgres.py<br/>Python ETL: extract + light typing only"]
-    A --> B
-
-    subgraph RAW["raw schema"]
-        C1["raw.daily_production_source"]
-        C2["raw.monthly_production_source"]
-    end
-    B --> C1
-    B --> C2
-
-    D["SQL transform<br/>sql/02_create_tables.sql target,<br/>populated by load_postgres.py's transform_core step"]
-    C1 --> D
+    A[Excel workbook, read only] --> B[load_postgres.py]
+    B --> C1[raw.daily_production_source]
+    B --> C2[raw.monthly_production_source]
+    C1 --> D[SQL transform to core]
     C2 --> D
-
-    subgraph CORE["core schema"]
-        E1["core.wellbore"]
-        E2["core.daily_production"]
-        E3["core.monthly_reference"]
-    end
-    D --> E1
-    D --> E2
-    D --> E3
-
-    F["analytics.vw_* views<br/>sql/05_views.sql<br/>joins/aggregations an analyst would otherwise repeat"]
-    E1 --> F
+    D --> E1[core.wellbore]
+    D --> E2[core.daily_production]
+    D --> E3[core.monthly_reference]
+    E1 --> F[analytics.vw_* views]
     E2 --> F
     E3 --> F
-
-    G["sql/06_analysis.sql<br/>12 engineering questions, A1-A12<br/>full DB access"]
-    H["app/<br/>sql/07_app_role.sql: volve_app role,<br/>SELECT on analytics only - no core/raw"]
-    F --> G
-    F --> H
-
-    I["Dashboard<br/>4 pages - queries.py mirrors 06_analysis.sql's<br/>logic independently (app has no access to core)"]
-    J["Ask the Data<br/>local LLM via Ollama -> SQL -> analytics<br/>generated SQL always shown"]
-    H --> I
-    H --> J
+    F --> G[sql/06_analysis.sql, questions A1 to A12]
+    F --> H[app, volve_app role: analytics only]
+    H --> I[Dashboard]
+    H --> J[Ask the Data]
 ```
 
 `sql/06_analysis.sql` and `app/` are parallel, independent consumers of

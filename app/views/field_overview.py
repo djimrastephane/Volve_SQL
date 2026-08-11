@@ -58,14 +58,31 @@ fig2.update_yaxes(title_text="Gas (Sm³ / month)", secondary_y=True)
 st.plotly_chart(fig2, width="stretch")
 
 st.subheader("Water injection")
+st.caption(
+    "Oil production overlaid for reference - peak monthly water injection "
+    "is only ~2x peak monthly oil (533K vs 277K Sm³), close enough to share "
+    "one axis, so trends can be compared directly rather than through two "
+    "independently-scaled axes that could make unrelated series look "
+    "correlated (or hide a real one)."
+)
 col_a, col_b = st.columns(2)
 with col_a:
-    fig3 = px.bar(field, x="month_start", y="water_injection_volume", color_discrete_sequence=[c.WATER])
-    fig3.update_layout(title="Monthly", yaxis_title="Sm³", xaxis_title=None)
+    fig3 = go.Figure()
+    fig3.add_trace(go.Bar(x=field["month_start"], y=field["water_injection_volume"],
+                           name="Water injection", marker_color=c.WATER))
+    fig3.add_trace(go.Scatter(x=field["month_start"], y=field["oil_volume"],
+                               name="Oil", mode="lines", line=dict(color=c.OIL)))
+    fig3.update_layout(title="Monthly", yaxis_title="Sm³ / month", xaxis_title=None)
     st.plotly_chart(fig3, width="stretch")
 with col_b:
     field["cumulative_water_injection"] = field["water_injection_volume"].cumsum()
-    fig3b = px.area(field, x="month_start", y="cumulative_water_injection", color_discrete_sequence=[c.WATER])
+    field["cumulative_oil"] = field["oil_volume"].fillna(0).cumsum()
+    fig3b = go.Figure()
+    fig3b.add_trace(go.Scatter(x=field["month_start"], y=field["cumulative_water_injection"],
+                                name="Water injection", mode="lines", fill="tozeroy",
+                                line=dict(color=c.WATER)))
+    fig3b.add_trace(go.Scatter(x=field["month_start"], y=field["cumulative_oil"],
+                                name="Oil", mode="lines", line=dict(color=c.OIL)))
     fig3b.update_layout(title="Cumulative  -  A7", yaxis_title="Sm³", xaxis_title=None)
     st.plotly_chart(fig3b, width="stretch")
 

@@ -18,6 +18,26 @@ affiliated with, sponsored by, or endorsed by Equinor or the former Volve
 license partners — see [Data license and attribution](#data-license-and-attribution)
 and [`NOTICE`](NOTICE).
 
+## Screenshots
+
+The Streamlit dashboard (`app/`) — connected only to `analytics.*`, see
+[Section 5](#5-architecture) — running against the live database.
+
+**Field Overview**
+![Field Overview](docs/screenshots/field_overview.png)
+
+**Well Comparison** — selected wells superposed on one chart, actual production on real calendar time
+![Well Comparison](docs/screenshots/well_comparison.png)
+
+**Well Performance**
+![Well Performance](docs/screenshots/well_performance.png)
+
+**Data Quality**
+![Data Quality](docs/screenshots/data_quality.png)
+
+**Ask the Data** — free-text question → SQL via a local LLM, answer + source view + the generated SQL always shown
+![Ask the Data](docs/screenshots/ask_the_data.png)
+
 ## 1. Project overview
 
 This project takes a real oilfield production dataset — 15,634 daily records
@@ -452,6 +472,8 @@ Volve_SQL/
 │   ├── 05_views.sql
 │   ├── 06_analysis.sql
 │   └── 07_app_role.sql
+├── docs/
+│   └── screenshots/               dashboard screenshots used in this README
 └── app/                          Streamlit dashboard + Ask the Data - see app/README.md
     ├── app.py
     ├── db.py

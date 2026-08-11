@@ -127,21 +127,7 @@ properly rather than by guesswork.
 
 ```mermaid
 flowchart TD
-    A["Excel workbook, read only"] --> B["load_postgres.py"]
-    B --> C1["raw.daily_production_source"]
-    B --> C2["raw.monthly_production_source"]
-    C1 --> D["SQL transform to core"]
-    C2 --> D
-    D --> E1["core.wellbore"]
-    D --> E2["core.daily_production"]
-    D --> E3["core.monthly_reference"]
-    E1 --> F["analytics views"]
-    E2 --> F
-    E3 --> F
-    F --> G["sql 06 analysis, questions A1 to A12"]
-    F --> H["app, volve_app role, analytics only"]
-    H --> I["Dashboard"]
-    H --> J["Ask the Data"]
+    A[Excel] --> B[Postgres]
 ```
 
 `sql/06_analysis.sql` and `app/` are parallel, independent consumers of

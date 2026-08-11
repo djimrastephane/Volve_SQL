@@ -68,9 +68,10 @@ This project uses data from the Volve Data Village, made available by
 Equinor and the former Volve license partners, ExxonMobil Exploration &
 Production Norway AS and Bayerngas Norge AS (or their successors/assignees).
 
-The Volve dataset is used under the Volve Data Village Terms and Conditions
-for Use of License to Data. The original dataset remains subject to those
-terms.
+The Volve dataset is used under the
+[Volve Data Village Terms and Conditions for Use of License to Data](https://cdn.equinor.com/files/h61q9gi9/global/de6532f6134b9a953f6c41bac47a0c055a3712d3.pdf?equinor-hrs-terms-and-conditions-for-licence-to-data-volve.pdf=)
+(see also [Equinor's Volve data-sharing page](https://www.equinor.com/energy/volve-data-sharing)).
+The original dataset remains subject to those terms.
 
 This repository is an independent project and is not affiliated with,
 sponsored by, or endorsed by Equinor or the former Volve license partners.

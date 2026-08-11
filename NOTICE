@@ -5,10 +5,12 @@ Equinor and the former Volve license partners, ExxonMobil Exploration &
 Production Norway AS and Bayerngas Norge AS (or their successors/assignees).
 
 The Volve dataset is used under the Volve Data Village Terms and Conditions
-for Use of License to Data. The original dataset remains subject to those
-terms and is not covered by this repository's MIT license (see LICENSE),
-which applies only to the code, SQL, and documentation authored for this
-project.
+for Use of License to Data:
+https://cdn.equinor.com/files/h61q9gi9/global/de6532f6134b9a953f6c41bac47a0c055a3712d3.pdf?equinor-hrs-terms-and-conditions-for-licence-to-data-volve.pdf=
+(see also https://www.equinor.com/energy/volve-data-sharing). The original
+dataset remains subject to those terms and is not covered by this
+repository's MIT license (see LICENSE), which applies only to the code,
+SQL, and documentation authored for this project.
 
 This repository is an independent project and is not affiliated with,
 sponsored by, or endorsed by Equinor or the former Volve license partners.

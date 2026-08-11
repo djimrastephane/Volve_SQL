@@ -59,6 +59,41 @@ fig2 = px.line(daily, x="production_date", y="bore_wat_vol", color_discrete_sequ
 fig2.update_layout(yaxis_title="Sm³ / day", xaxis_title=None)
 st.plotly_chart(fig2, width="stretch")
 
+has_injection = daily["bore_wi_vol"].astype("float64").gt(0).any()
+if has_injection:
+    st.subheader("Water injection")
+    has_oil = daily["bore_oil_vol"].notna().any()
+    if has_oil:
+        st.caption(
+            "Oil overlaid for reference on a separate axis - this well's peak "
+            "water injection is ~25x its peak oil (unlike the field-wide "
+            "~2x, sharing one axis here would flatten oil to the baseline, "
+            "the same problem fixed on Field Overview's production chart). "
+            "A dual axis makes both readable, but can visually suggest a "
+            "correlation that isn't really there - read the timing, not the "
+            "relative heights."
+        )
+    else:
+        st.caption(
+            "This well never produces oil (a pure injector) - no oil trace "
+            "to overlay."
+        )
+    fig2b = make_subplots(specs=[[{"secondary_y": True}]])
+    fig2b.add_trace(
+        go.Scatter(x=daily["production_date"], y=daily["bore_wi_vol"], name="Water injection",
+                   mode="lines", line=dict(color=c.WATER)),
+        secondary_y=False,
+    )
+    if has_oil:
+        fig2b.add_trace(
+            go.Scatter(x=daily["production_date"], y=daily["bore_oil_vol"], name="Oil",
+                       mode="lines", line=dict(color=c.OIL)),
+            secondary_y=True,
+        )
+        fig2b.update_yaxes(title_text="Oil (Sm³ / day)", secondary_y=True)
+    fig2b.update_yaxes(title_text="Water injection (Sm³ / day)", secondary_y=False)
+    st.plotly_chart(fig2b, width="stretch")
+
 st.subheader("On-stream hours and shutdown/restart events")
 st.caption("Shutdown/restart = a change in active state between two consecutive recorded days  -  A11")
 fig3 = px.bar(daily, x="production_date", y="on_stream_hrs")

@@ -5,6 +5,7 @@
 ![pandas](https://img.shields.io/badge/pandas-3.0.5-150458?logo=pandas&logoColor=white)
 ![Data Quality](https://img.shields.io/badge/data%20quality%20checks-21%20PASS%20%2F%206%20REVIEW%20%2F%200%20FAIL-yellow)
 ![Dataset](https://img.shields.io/badge/dataset-Equinor%20Volve-005c99)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 An industrial data-engineering exercise built on Equinor's public **Volve** field
 production dataset: rigorous source-data profiling and quality assessment,

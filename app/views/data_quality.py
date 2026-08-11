@@ -48,9 +48,16 @@ if selected_issue:
         fig2.update_layout(title="Affected wells", yaxis_title="Records", xaxis_title=None)
         st.plotly_chart(fig2, width="stretch")
     with dc2:
-        by_date = detail.groupby("production_date").size().reset_index(name="record_count")
-        fig3 = px.bar(by_date, x="production_date", y="record_count")
-        fig3.update_layout(title="Affected dates", yaxis_title="Records", xaxis_title=None)
+        # Grouped by month, not exact date: DQ-001 has 122 distinct dates
+        # inside a 4-month span (one bar per day would merge into a solid
+        # block, indistinguishable), and DQ-003 has 153 dates scattered
+        # across 9+ years (one bar per day would be near-invisible hairlines
+        # across a huge range). Monthly bars stay readable at both extremes.
+        detail_by_month = detail.copy()
+        detail_by_month["month"] = detail_by_month["production_date"].dt.to_period("M").dt.to_timestamp()
+        by_date = detail_by_month.groupby("month").size().reset_index(name="record_count")
+        fig3 = px.bar(by_date, x="month", y="record_count")
+        fig3.update_layout(title="Affected dates (by month)", yaxis_title="Records", xaxis_title=None)
         st.plotly_chart(fig3, width="stretch")
     st.dataframe(
         detail.rename(columns={

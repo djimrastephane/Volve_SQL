@@ -3,6 +3,7 @@
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-336791?logo=postgresql&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
 ![pandas](https://img.shields.io/badge/pandas-3.0.5-150458?logo=pandas&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.61-FF4B4B?logo=streamlit&logoColor=white)
 ![Data Quality](https://img.shields.io/badge/data%20quality%20checks-21%20PASS%20%2F%206%20REVIEW%20%2F%200%20FAIL-yellow)
 [![Dataset](https://img.shields.io/badge/dataset-Equinor%20Volve-005c99)](#data-license-and-attribution)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -126,6 +127,11 @@ Equinor Volve Excel workbook (data/raw/Volve production data.xlsx, read-only)
                     |
                     v
       sql/06_analysis.sql  -  12 engineering questions, A1-A12
+                    |
+                    v
+      app/  -  Streamlit dashboard, connected only to analytics
+        (sql/07_app_role.sql: a dedicated volve_app role with SELECT on
+         analytics only - no grant on core or raw - see app/README.md)
 ```
 
 `raw` preserves the source as faithfully as typing allows; `core` is where
@@ -221,6 +227,8 @@ hidden.
 | `sql/04_quality_checks.sql` | 27 automated checks (`QC-001`–`QC-021`, `DQ-001`–`DQ-006`), each PASS/FAIL/REVIEW, re-verifying the notebook's findings against the live database |
 | `sql/05_views.sql` | 5 analyst-facing views — deliberately not a "KPI factory"; no derived business ratios until an analysis question needs one more than once |
 | `sql/06_analysis.sql` | 12 engineering questions, A1–A12 |
+| `sql/07_app_role.sql` | Creates `volve_app`, a least-privilege role with `SELECT` on `analytics` only, for `app/` |
+| `app/` | Streamlit dashboard for a production engineer, built directly on `analytics.*` and the A1–A12 questions — see `app/README.md` |
 
 Every measurement column uses `NUMERIC`, not `FLOAT`/`DOUBLE PRECISION` — it
 prevents new arithmetic rounding error, though it can't erase precision
@@ -409,6 +417,8 @@ psql -d volve_analytics -f sql/04_quality_checks.sql   # expect: 21 PASS, 6 REVI
 psql -d volve_analytics -f sql/05_views.sql
 psql -d volve_analytics -f sql/06_analysis.sql
 psql -d volve_analytics -f sql/03_create_indexes.sql   # documentation + verification query only
+psql -d volve_analytics -f sql/07_app_role.sql
+streamlit run app/app.py   # http://localhost:8501 - see app/README.md
 ```
 
 `src/load_postgres.py` truncates and reloads inside a single transaction, so
@@ -434,19 +444,29 @@ Volve_SQL/
 ├── src/
 │   ├── profile_source.py
 │   └── load_postgres.py
-└── sql/
-    ├── 01_create_schemas.sql
-    ├── 02_create_tables.sql
-    ├── 03_create_indexes.sql
-    ├── 04_quality_checks.sql
-    ├── 05_views.sql
-    └── 06_analysis.sql
+├── sql/
+│   ├── 01_create_schemas.sql
+│   ├── 02_create_tables.sql
+│   ├── 03_create_indexes.sql
+│   ├── 04_quality_checks.sql
+│   ├── 05_views.sql
+│   ├── 06_analysis.sql
+│   └── 07_app_role.sql
+└── app/                          Streamlit dashboard - see app/README.md
+    ├── app.py
+    ├── db.py
+    ├── queries.py
+    └── views/
+        ├── field_overview.py
+        ├── well_performance.py
+        ├── well_comparison.py
+        └── data_quality.py
 ```
 
 ## 14. Technologies
 
 PostgreSQL 17 · Python 3.11 · pandas · openpyxl · psycopg2 · Jupyter
-(nbformat/nbclient) · plain SQL (no ORM)
+(nbformat/nbclient) · Streamlit · Plotly · plain SQL (no ORM)
 
 ## 15. Limitations
 
@@ -472,3 +492,6 @@ PostgreSQL 17 · Python 3.11 · pandas · openpyxl · psycopg2 · Jupyter
 - Extend `analytics` with true KPI views (water cut, GOR, decline curves)
   once those calculations are used by more than one downstream consumer,
   per the "no KPI factory" rule in `sql/05_views.sql`.
+- "Ask the Data": a natural-language query interface in `app/`, next to the
+  dashboard, generating SQL against `analytics.*`, executing it, and
+  showing the generated SQL alongside the answer rather than hiding it.

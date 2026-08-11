@@ -9,3 +9,8 @@ psycopg2-binary==2.9.12
 ipykernel==7.3.0
 nbformat==5.11.0
 nbclient==0.11.0
+
+# Dashboard (app/) - queries analytics.* views only, via the volve_app role
+# (sql/07_app_role.sql)
+streamlit==1.61.1
+plotly==6.9.0

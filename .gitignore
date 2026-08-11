@@ -8,3 +8,6 @@ __pycache__/
 
 # Volve licensed source data - not redistributed, see NOTICE and data/README.md
 data/raw/*.xlsx
+
+# Streamlit local config/secrets (e.g. a future NL-to-SQL API key)
+.streamlit/secrets.toml

@@ -1,0 +1,14 @@
+NOTICE
+
+This project uses data from the Volve Data Village, made available by
+Equinor and the former Volve license partners, ExxonMobil Exploration &
+Production Norway AS and Bayerngas Norge AS (or their successors/assignees).
+
+The Volve dataset is used under the Volve Data Village Terms and Conditions
+for Use of License to Data. The original dataset remains subject to those
+terms and is not covered by this repository's MIT license (see LICENSE),
+which applies only to the code, SQL, and documentation authored for this
+project.
+
+This repository is an independent project and is not affiliated with,
+sponsored by, or endorsed by Equinor or the former Volve license partners.

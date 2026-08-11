@@ -7,10 +7,15 @@
 ![Dataset](https://img.shields.io/badge/dataset-Equinor%20Volve-005c99)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-An industrial data-engineering exercise built on Equinor's public **Volve** field
-production dataset: rigorous source-data profiling and quality assessment,
-followed by a PostgreSQL implementation (schemas, constraints, quality checks,
-views, and analysis) built entirely on rules the data itself justified.
+A PostgreSQL-based production analytics project using Equinor's publicly
+released Volve Data Village dataset, transforming raw well data into a
+validated analytical database for investigating well performance, production
+decline, water production, injection behaviour, uptime, and field evolution.
+
+This is an independent project built for demonstration purposes. It is not
+affiliated with, sponsored by, or endorsed by Equinor or the former Volve
+license partners — see [Data license and attribution](#data-license-and-attribution)
+and [`NOTICE`](NOTICE).
 
 ## 1. Project overview
 
@@ -44,8 +49,10 @@ limitations rather than one that has quietly discarded them.
 
 ## 3. Dataset
 
-- **Source**: Equinor Volve field production data (public release), read
-  from `data/raw/Volve production data.xlsx` and never modified.
+- **Source**: Volve Data Village release (Equinor), read from
+  `data/raw/Volve production data.xlsx` and never modified. The file itself
+  is not committed to this repository — see below and `data/README.md` for
+  how to obtain it.
 - **Daily sheet**: 15,634 rows, 7 wellbores, 2008-01-01 (nominal) through
   2016, one row per wellbore per calendar day with production/injection
   volumes and downhole/wellhead measurements.
@@ -54,6 +61,34 @@ limitations rather than one that has quietly discarded them.
   primary fact table.
 - Wellbores mix producers (`OP`) and injectors (`WI`), and several wellbores
   change role over their recorded lifetime (see [Section 11](#11-database-design-decisions)).
+
+### Data license and attribution
+
+This project uses data from the Volve Data Village, made available by
+Equinor and the former Volve license partners, ExxonMobil Exploration &
+Production Norway AS and Bayerngas Norge AS (or their successors/assignees).
+
+The Volve dataset is used under the Volve Data Village Terms and Conditions
+for Use of License to Data. The original dataset remains subject to those
+terms.
+
+This repository is an independent project and is not affiliated with,
+sponsored by, or endorsed by Equinor or the former Volve license partners.
+
+The source workbook is deliberately **not** committed to this repository
+(`data/raw/*.xlsx` is gitignored) — both to avoid redistributing the
+licensed material itself, and because a database built from a substantial
+portion of it would constitute Adapted Material under the license's terms.
+See `NOTICE` and `data/README.md` for how to obtain the file and verify it
+against the checksum this project was built and tested against.
+
+Equinor provides the dataset "as is," with no warranty concerning accuracy,
+quality, or fitness for purpose, and states it may contain errors or
+omissions. That is precisely the starting assumption
+[Section 7](#7-data-quality-approach) is built on — nothing in this project
+treats the source as authoritative by default; every questionable value was
+investigated and documented (`DQ-001`–`DQ-006`) rather than silently
+corrected or discarded.
 
 ## 4. Why PostgreSQL
 
@@ -360,6 +395,10 @@ changed concrete schema decisions:
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
+# Obtain the Volve source workbook yourself and place it at
+# data/raw/Volve production data.xlsx - see data/README.md.
+# It is not included in this repository (Volve Data Village license terms).
+
 createdb volve_analytics   # or point to an existing empty database
 
 psql -d volve_analytics -f sql/01_create_schemas.sql
@@ -381,9 +420,12 @@ checks, `21` PASS, `6` REVIEW, `0` FAIL, `PASS WITH REVIEW` overall.
 ```
 Volve_SQL/
 ├── README.md
+├── LICENSE                      MIT license - covers this project's code only
+├── NOTICE                       Volve data attribution and license notice
 ├── requirements.txt
 ├── data/
-│   ├── raw/                     Volve production data.xlsx (read-only, untouched)
+│   ├── README.md                how to obtain the source workbook
+│   ├── raw/                     Volve production data.xlsx (gitignored - not committed)
 │   └── profiling/               CSV outputs from src/profile_source.py
 ├── notebooks/
 │   ├── 01_source_exploration.ipynb

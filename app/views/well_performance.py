@@ -5,6 +5,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 import queries as q
@@ -26,15 +27,27 @@ c4.metric("Production days", f"{lifetime['number_of_production_days']:,.0f}")
 st.caption(f"Source: `{q.VIEW_LIFETIME}`  -  peak from A4")
 
 st.subheader("Production history")
-st.caption("Daily oil / gas / water volumes")
-prod_long = daily.melt(
-    id_vars="production_date",
-    value_vars=["bore_oil_vol", "bore_gas_vol", "bore_wat_vol"],
-    var_name="stream",
-    value_name="volume",
+st.caption(
+    "Daily oil / gas / water volumes. Oil and water share the left axis; "
+    "gas is plotted on the right axis - this well's gas-to-oil ratio is "
+    "~140-155x (consistent across all 7 wells), which would otherwise "
+    "flatten oil/water to the baseline on a single shared axis."
 )
-fig = px.line(prod_long, x="production_date", y="volume", color="stream")
-fig.update_layout(yaxis_title="Sm³ / day", xaxis_title=None)
+fig = make_subplots(specs=[[{"secondary_y": True}]])
+fig.add_trace(
+    go.Scatter(x=daily["production_date"], y=daily["bore_oil_vol"], name="Oil", mode="lines"),
+    secondary_y=False,
+)
+fig.add_trace(
+    go.Scatter(x=daily["production_date"], y=daily["bore_wat_vol"], name="Water", mode="lines"),
+    secondary_y=False,
+)
+fig.add_trace(
+    go.Scatter(x=daily["production_date"], y=daily["bore_gas_vol"], name="Gas", mode="lines"),
+    secondary_y=True,
+)
+fig.update_yaxes(title_text="Oil / Water (Sm³ / day)", secondary_y=False)
+fig.update_yaxes(title_text="Gas (Sm³ / day)", secondary_y=True)
 st.plotly_chart(fig, width="stretch")
 
 st.subheader("Water production")

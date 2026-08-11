@@ -1,0 +1,2 @@
+rows,columns,unique_wellbores,earliest_year_month,latest_year_month,duplicated_combinations,rows_involved_in_duplicates,rows_with_all_key_columns_null
+527,10,7,2007-09,2016-12,0,0,1

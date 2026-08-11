@@ -1,0 +1,11 @@
+column,total_rows,missing_count,missing_pct,non_missing_count
+GI,527,526,99.81,1
+WI,527,325,61.67,202
+Oil,527,215,40.8,312
+Gas,527,215,40.8,312
+Water,527,215,40.8,312
+On Stream,527,11,2.09,516
+Wellbore name,527,1,0.19,526
+NPDCode,527,1,0.19,526
+Year,527,1,0.19,526
+Month,527,1,0.19,526

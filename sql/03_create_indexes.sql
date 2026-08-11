@@ -1,0 +1,227 @@
+-- =============================================================================
+-- 03_create_indexes.sql
+--
+-- Written last, on purpose, after sql/06_analysis.sql exists - indexing
+-- decisions here are evidence-based (tested with EXPLAIN against the real
+-- 12 queries in 06_analysis.sql), not speculative.
+--
+-- Policy: an index is only added if EXPLAIN shows it changes the plan for
+-- a query that actually appears in 06_analysis.sql. "This column looks
+-- like it should have an index" is not sufficient justification on its
+-- own - see the flow_kind/well_type findings below, where cardinality
+-- alone said "maybe" but the real query set said "no."
+--
+-- Result: 0 additional indexes were added. Every candidate below was
+-- tested, not assumed, and the file documents why each one was rejected.
+-- That is a legitimate outcome, not an incomplete one - see Section 3.
+-- =============================================================================
+
+
+-- -----------------------------------------------------------------------------
+-- 1. Indexes already created implicitly by primary/unique keys
+--
+-- PostgreSQL creates a unique B-tree index automatically for every PRIMARY
+-- KEY and UNIQUE constraint (sql/02_create_tables.sql). Nothing here
+-- should duplicate any of these.
+-- -----------------------------------------------------------------------------
+
+-- core.wellbore:
+--   pk_wellbore                 UNIQUE btree (npd_well_bore_code)
+--   uq_wellbore_name             UNIQUE btree (npd_well_bore_name)
+--   uq_wellbore_well_bore_code   UNIQUE btree (well_bore_code)
+--
+-- core.daily_production:
+--   pk_daily_production          UNIQUE btree (npd_well_bore_code, production_date)
+--
+-- core.monthly_reference:
+--   pk_monthly_reference         UNIQUE btree (npd_well_bore_code, reference_year, reference_month)
+--
+-- A composite index's leading column(s) are usable on their own - a query
+-- that only filters/joins on npd_well_bore_code already benefits from
+-- pk_daily_production without a separate single-column index on it. This
+-- is exactly why sql/06_analysis.sql's per-wellbore JOINs (A3-A5, A9, A11,
+-- A12: JOIN core.wellbore ON npd_well_bore_code) need nothing new.
+
+
+-- -----------------------------------------------------------------------------
+-- 2. Reviewing 06_analysis.sql: what columns are actually used, and how?
+--
+-- For every query, the same three questions from the brief:
+-- -----------------------------------------------------------------------------
+--
+-- JOIN columns              npd_well_bore_code, throughout (A3-A5, A9, A11, A12)
+--                            -> leading column of pk_daily_production; already covered.
+--
+-- WHERE filter columns       bore_oil_vol IS NOT NULL (A4, A5, A9)
+--                            bore_oil_vol > 0 (A3, A12)
+--                            bore_wi_vol > 0 (A12)
+--                            on_stream_hrs IS NOT NULL (A11)
+--                            oil_volume IS NOT NULL (A6, A8 - on a view, not a base column)
+--                            None of these are equality lookups on a
+--                            low-cardinality category or a narrow range -
+--                            they are broad IS NOT NULL / > 0 conditions
+--                            touching a large fraction of the table, which
+--                            is exactly the case a B-tree index tends not
+--                            to help (Section 3 below tests this directly).
+--
+-- ORDER BY / PARTITION BY    PARTITION BY npd_well_bore_code ORDER BY production_date (A4, A5, A11)
+--                            -> matches pk_daily_production's column order exactly.
+--                            ORDER BY month_start (A6, A7, A8, A10) - a view-computed
+--                            column (make_date() of EXTRACT(YEAR/MONTH FROM production_date)),
+--                            not the raw production_date column - a plain
+--                            index on production_date cannot accelerate
+--                            sorting or grouping by a different expression
+--                            of it. Confirmed in Section 3.
+--
+-- No query filters on well_type or flow_kind anywhere in 06_analysis.sql.
+
+
+-- -----------------------------------------------------------------------------
+-- 3. Candidates tested with EXPLAIN, and what PostgreSQL actually did
+--
+-- Every plan below is real output from this project's database
+-- (volve_analytics), captured while writing this file - not a prediction.
+-- -----------------------------------------------------------------------------
+
+-- --- Candidate: idx_daily_production_date ON core.daily_production (production_date) ---
+--
+-- Hypothesis going in: this should help "queries that scan the field
+-- chronologically" - specifically the aggregation behind
+-- analytics.vw_field_monthly_summary, which underlies A6-A10.
+--
+-- Test 1 - the actual query behind A6/A8/A10 (GROUP BY an EXTRACT()
+-- expression of production_date):
+--
+--   EXPLAIN (ANALYZE, BUFFERS)
+--   SELECT EXTRACT(YEAR FROM production_date)::int, EXTRACT(MONTH FROM production_date)::int,
+--          SUM(bore_oil_vol)
+--   FROM core.daily_production
+--   GROUP BY 1, 2;
+--
+-- Result: IDENTICAL plan with and without the index - Seq Scan on
+-- daily_production -> Sort -> HashAggregate -> Sort, cost ~953 either way.
+-- The index is never touched. Reason: the GROUP BY key is
+-- EXTRACT(...FROM production_date), not production_date itself - a plain
+-- B-tree index on the raw column cannot accelerate grouping or sorting by
+-- a different expression of it. This directly contradicts the original
+-- hypothesis for this specific query shape.
+--
+-- Test 2 - A11's actual window function (PARTITION BY npd_well_bore_code
+-- ORDER BY production_date):
+--
+--   EXPLAIN (ANALYZE, BUFFERS)
+--   SELECT npd_well_bore_code, production_date,
+--          LAG(on_stream_hrs > 0) OVER (PARTITION BY npd_well_bore_code ORDER BY production_date)
+--   FROM core.daily_production
+--   WHERE on_stream_hrs IS NOT NULL;
+--
+-- Result: already uses "Index Scan using pk_daily_production" - with or
+-- without idx_daily_production_date. The composite primary key's column
+-- order (npd_well_bore_code, production_date) matches this window
+-- function's partition/order exactly, so it was never a candidate that
+-- needed a new index in the first place.
+--
+-- Test 3 - a query shape that does NOT appear in 06_analysis.sql today,
+-- included because it is the one place the index genuinely mattered:
+--
+--   EXPLAIN (ANALYZE, BUFFERS)
+--   SELECT npd_well_bore_code, production_date, bore_oil_vol
+--   FROM core.daily_production
+--   ORDER BY production_date
+--   LIMIT 20;
+--
+-- Result: WITHOUT the index - Seq Scan + top-N sort, cost 826, 257 buffer
+-- hits, 4.2 ms. WITH the index - Index Scan straight to the front of the
+-- index, cost 2, 22 buffer accesses, 0.1 ms. A real, order-of-magnitude
+-- improvement - for a query pattern (raw chronological browse/limit, or a
+-- plain production_date range filter) that simply is not one of the 12
+-- questions in 06_analysis.sql as written.
+--
+-- DECISION: not created. The policy in this file's header is "an index is
+-- only added if EXPLAIN shows it changes the plan for a query that
+-- actually appears in 06_analysis.sql" - Test 3 proves the index works,
+-- but proves it for a query this project does not currently ask. If a
+-- future analysis question needs a plain chronological scan or a
+-- production_date range filter without a wellbore join, re-run Test 3's
+-- EXPLAIN and add this index then - the evidence already shown here is
+-- reason enough at that point.
+
+-- --- Candidate: idx_daily_well_type ON core.daily_production (well_type) ---
+-- --- Candidate: idx_daily_flow_kind ON core.daily_production (flow_kind) ---
+--
+-- Cardinality: well_type is OP (9,143) / WI (6,491); flow_kind is
+-- production (9,161) / injection (6,473) - roughly 41/59 splits, neither
+-- remotely selective.
+--
+--   EXPLAIN (ANALYZE, BUFFERS)
+--   SELECT count(*) FROM core.daily_production WHERE well_type = 'WI';
+--
+-- Result: without an index, Seq Scan, cost 465, 254 buffers. With one,
+-- PostgreSQL actually did switch to an Index Only Scan here (cost 158, 9
+-- buffers) - a count(*)-only query can be satisfied entirely from the
+-- index without touching the table, which is a favorable case even at
+-- ~42% selectivity. A query that also needs other columns (forcing heap
+-- fetches for 40-60% of the table) would very likely see the planner
+-- fall back to a Seq Scan instead, per the standard low-selectivity
+-- reasoning.
+--
+-- DECISION: not created, on relevance grounds before the cardinality
+-- question even matters - no query in 06_analysis.sql filters on
+-- well_type or flow_kind at all. An index with a plausible EXPLAIN case
+-- is still unjustified if nothing in the actual workload uses it.
+
+-- --- Not tested individually: bore_oil_vol, bore_gas_vol, bore_wat_vol,
+-- --- bore_wi_vol, avg_whp_p, and the other measurement columns ---
+--
+-- Every analysis query either aggregates these (SUM, MAX) across most or
+-- all rows, or ranks them with a window function over an entire partition
+-- (A1, A2, A4, A5, A8, A9) - both access patterns read the bulk of the
+-- table regardless of row order, which a B-tree index does not speed up.
+-- Consistent with the policy header: not tested individually because nothing
+-- in their usage pattern suggests a plausible index would apply, unlike
+-- production_date/well_type/flow_kind above, which were at least worth
+-- the EXPLAIN experiment.
+
+
+-- -----------------------------------------------------------------------------
+-- 4/5. Summary, and how to re-run this analysis
+-- -----------------------------------------------------------------------------
+--
+-- Additional indexes created: 0
+--
+-- Reason:
+--   The 15,634-row daily fact table is small enough, and every query in
+--   06_analysis.sql either (a) joins/filters on npd_well_bore_code, already
+--   served by the composite primary key's leading column, (b) windows
+--   PARTITION BY npd_well_bore_code ORDER BY production_date, which matches
+--   that same primary key's column order exactly, or (c) aggregates across
+--   most of the table by an expression of production_date, which no plain
+--   column index can accelerate. One genuinely useful candidate
+--   (production_date alone, for a raw chronological scan) was proven with
+--   EXPLAIN but does not match any current query and was deliberately not
+--   added speculatively. Two categorical candidates (well_type, flow_kind)
+--   were tested and rejected primarily because no current query filters on
+--   them at all - their EXPLAIN results were a secondary check, not the
+--   deciding factor.
+--
+-- To redo this analysis after 06_analysis.sql changes:
+--   1. For each new/changed query, run EXPLAIN (ANALYZE, BUFFERS) as-is.
+--   2. CREATE INDEX ... (candidate); re-run the same EXPLAIN.
+--   3. Compare cost, buffers, and actual time. Keep the index only if the
+--      plan changed AND the query is one this project actually runs -
+--      not "would this column benefit from an index in general."
+--   4. If rejected, DROP INDEX and document the finding here, the same
+--      way flow_kind/well_type are documented above - a rejected
+--      candidate with evidence is worth more to this project than an
+--      untested one.
+-- =============================================================================
+
+
+-- Verification: confirm the index inventory matches what Section 1 above
+-- documents - no index created by this file, only the ones PostgreSQL
+-- already built automatically for the PK/UNIQUE constraints in
+-- sql/02_create_tables.sql.
+SELECT schemaname, tablename, indexname, indexdef
+FROM pg_indexes
+WHERE schemaname IN ('core', 'raw')
+ORDER BY tablename, indexname;

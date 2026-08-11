@@ -230,15 +230,19 @@ def monthly_production_multi(well_codes: list[int]) -> pd.DataFrame:
 def water_trends(well_codes: list[int]) -> pd.DataFrame:
     """analytics.vw_monthly_well_performance - per-well water-oil ratio, A6 generalized"""
     if not well_codes:
-        return pd.DataFrame(columns=["wellbore_name", "year", "month", "water_oil_ratio"])
-    return run_query(f"""
+        return pd.DataFrame(columns=["wellbore_name", "month_start", "water_oil_ratio"])
+    df = run_query(f"""
         SELECT
-            wellbore_name, year, month, water_volume, oil_volume,
+            wellbore_name,
+            make_date(year, month, 1) AS month_start,
+            water_volume, oil_volume,
             ROUND(water_volume / NULLIF(oil_volume, 0), 3) AS water_oil_ratio
         FROM {VIEW_MONTHLY}
         WHERE npd_well_bore_code = ANY(%s)
-        ORDER BY wellbore_name, year, month
+        ORDER BY wellbore_name, month_start
     """, (well_codes,))
+    df["month_start"] = pd.to_datetime(df["month_start"])
+    return df
 
 
 def decline(well_codes: list[int]) -> pd.DataFrame:

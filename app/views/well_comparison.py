@@ -92,11 +92,16 @@ st.subheader("Water trends")
 st.caption("Monthly water/oil ratio per well  -  A6 generalized across wells")
 water = q.water_trends(selected_codes)
 if not water.empty:
-    water["month_start"] = water["year"].astype(str) + "-" + water["month"].astype(str).str.zfill(2)
-    # Default categorical palette - same reasoning as the two charts above.
+    # Real date axis, not a categorical string month label - the previous
+    # version forced type="category" on a "YYYY-MM" string, which put one
+    # tick per calendar month (up to ~100+ across 9 years x 7 wells) instead
+    # of the automatic year-spaced ticks every other time-series chart in
+    # this app gets from a real date column. That was the actual
+    # readability problem, not the ratio values themselves (verified live:
+    # they genuinely reach ~25-30 late in some wells' lives - real rising
+    # water cut, not division-by-near-zero noise).
     fig3 = px.line(water, x="month_start", y="water_oil_ratio", color="wellbore_name")
     fig3.update_layout(yaxis_title="Water / oil ratio", xaxis_title=None)
-    fig3.update_xaxes(type="category")
     st.plotly_chart(fig3, width="stretch")
 else:
     st.caption("No monthly data for the selected wells.")

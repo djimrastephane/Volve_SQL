@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .DS_Store
 .idea/
+.claude/
 ~$*.xlsx
 .ipynb_checkpoints/
 

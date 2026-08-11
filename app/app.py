@@ -29,9 +29,13 @@ well_comparison = st.Page(
 data_quality = st.Page(
     "views/data_quality.py", title="Data Quality", icon="\U0001F50D"
 )
+ask_the_data = st.Page(
+    "views/ask_the_data.py", title="Ask the Data", icon="\U0001F4AC"
+)
 
 pg = st.navigation({
     "Dashboard": [field_overview, well_performance, well_comparison, data_quality],
+    "Ask the Data": [ask_the_data],
 })
 
 with st.sidebar:

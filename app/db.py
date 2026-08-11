@@ -45,6 +45,11 @@ def get_connection():
         kwargs["port"] = DB_PORT
     conn = psycopg2.connect(**kwargs)
     conn.set_session(readonly=True, autocommit=True)
+    # Defense in depth for Ask the Data (app/nlsql.py): an LLM-generated
+    # query that somehow slips past validation still can't run away -
+    # every query on this connection is capped, not only NL-generated ones.
+    with conn.cursor() as cur:
+        cur.execute("SET statement_timeout = '10s'")
     return conn
 
 

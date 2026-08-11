@@ -228,7 +228,7 @@ hidden.
 | `sql/05_views.sql` | 5 analyst-facing views — deliberately not a "KPI factory"; no derived business ratios until an analysis question needs one more than once |
 | `sql/06_analysis.sql` | 12 engineering questions, A1–A12 |
 | `sql/07_app_role.sql` | Creates `volve_app`, a least-privilege role with `SELECT` on `analytics` only, for `app/` |
-| `app/` | Streamlit dashboard for a production engineer, built directly on `analytics.*` and the A1–A12 questions — see `app/README.md` |
+| `app/` | Streamlit dashboard + "Ask the Data" NL-to-SQL page, both built directly on `analytics.*` and the A1–A12 questions — see `app/README.md` |
 
 Every measurement column uses `NUMERIC`, not `FLOAT`/`DOUBLE PRECISION` — it
 prevents new arithmetic rounding error, though it can't erase precision
@@ -452,15 +452,19 @@ Volve_SQL/
 │   ├── 05_views.sql
 │   ├── 06_analysis.sql
 │   └── 07_app_role.sql
-└── app/                          Streamlit dashboard - see app/README.md
+└── app/                          Streamlit dashboard + Ask the Data - see app/README.md
     ├── app.py
     ├── db.py
     ├── queries.py
+    ├── nlsql.py                  Ask the Data: question -> SQL, via local Ollama
+    ├── bench_nlsql.py            model benchmark (evidence for nlsql.py's default model)
+    ├── bench_results.md
     └── views/
         ├── field_overview.py
         ├── well_performance.py
         ├── well_comparison.py
-        └── data_quality.py
+        ├── data_quality.py
+        └── ask_the_data.py
 ```
 
 ## 14. Technologies
@@ -492,6 +496,7 @@ PostgreSQL 17 · Python 3.11 · pandas · openpyxl · psycopg2 · Jupyter
 - Extend `analytics` with true KPI views (water cut, GOR, decline curves)
   once those calculations are used by more than one downstream consumer,
   per the "no KPI factory" rule in `sql/05_views.sql`.
-- "Ask the Data": a natural-language query interface in `app/`, next to the
-  dashboard, generating SQL against `analytics.*`, executing it, and
-  showing the generated SQL alongside the answer rather than hiding it.
+- Improve "Ask the Data" on the two failure modes `app/bench_results.md`
+  found in every model tested: distinguishing a wellbore's first *recorded*
+  row from its first *producing* row, and generating a correct
+  `LAG`/`CASE` shutdown-restart query reliably.

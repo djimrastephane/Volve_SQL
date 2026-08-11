@@ -43,11 +43,30 @@ dashboard has no other option, since `volve_app` cannot see `core`. That
 this works at all is itself evidence the `analytics` layer carries enough
 information for real engineering analysis, not just for audit queries.
 
+## Ask the Data
+
+A second page, `views/ask_the_data.py`, turns a free-text question into SQL
+against `analytics.*` using a local LLM served by Ollama - no external API
+call, no data or schema leaves this machine. The model's only job is
+producing SQL; the displayed answer is always the literal query result,
+never an LLM paraphrase of it, and the generated SQL is always shown
+("View SQL").
+
+Model choice (`OLLAMA_MODEL` in `nlsql.py`, default `qwen2.5-coder:14b`)
+was picked from a benchmark, not by assumption - see `bench_nlsql.py` and
+`bench_results.md`. Five local models were tested against a text-to-SQL
+evaluation set built from the 12 questions in `sql/06_analysis.sql`, with
+ground truth computed live from the database. `qwen2.5-coder:14b` won on
+reliability (zero hallucinated columns across 3 Qwen variants x 12
+questions) and was ~14x faster than the next-best-scoring model, for a
+statistically tied correctness rate.
+
+Setup: `ollama pull qwen2.5-coder:14b` (or set `OLLAMA_MODEL` to a model
+you already have), then `ollama serve`.
+
 ## Status
 
-Dashboard: done, tested against the live database (see `queries.py` - each
-function is a single, auditable SQL statement, matching the project's
-existing SQL style).
-
-"Ask the Data" (natural-language query interface): not yet built - deferred
-pending a decision on the NL-to-SQL approach.
+Both the dashboard and Ask the Data are built and tested against the live
+database - `queries.py` (dashboard) and `nlsql.py`/`bench_nlsql.py` (Ask
+the Data) are each a single, auditable path from question to SQL to
+result, matching the project's existing SQL style.

@@ -7,10 +7,10 @@
 ![Dataset](https://img.shields.io/badge/dataset-Equinor%20Volve-005c99)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-An industrial data-engineering exercise built on Equinor's public **Volve** field
-production dataset: rigorous source-data profiling and quality assessment,
-followed by a PostgreSQL implementation (schemas, constraints, quality checks,
-views, and analysis) built entirely on rules the data itself justified.
+PostgreSQL-based production analytics platform for Equinor’s public **Volve** field, 
+transforming raw well data into a validated analytical database for investigating 
+well performance, production decline, water production, injection behaviour, 
+uptime, and field evolution.
 
 ## 1. Project overview
 

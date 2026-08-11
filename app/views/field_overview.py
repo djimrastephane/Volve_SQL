@@ -4,6 +4,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 import queries as q
@@ -28,14 +30,27 @@ fig.update_layout(yaxis_title="Active wells", xaxis_title=None)
 st.plotly_chart(fig, width="stretch")
 
 st.subheader("Production history")
-prod_long = field.melt(
-    id_vars="month_start",
-    value_vars=["oil_volume", "gas_volume", "water_volume"],
-    var_name="stream",
-    value_name="volume",
+st.caption(
+    "Oil and water share the left axis; gas is plotted on the right axis - "
+    "cumulative gas is ~150x cumulative oil (1.48B vs 10M Sm³), so on a "
+    "single shared axis gas dominates the chart and flattens oil/water to "
+    "the baseline, making them unreadable."
 )
-fig2 = px.line(prod_long, x="month_start", y="volume", color="stream")
-fig2.update_layout(yaxis_title="Sm³ / month", xaxis_title=None)
+fig2 = make_subplots(specs=[[{"secondary_y": True}]])
+fig2.add_trace(
+    go.Scatter(x=field["month_start"], y=field["oil_volume"], name="Oil", mode="lines"),
+    secondary_y=False,
+)
+fig2.add_trace(
+    go.Scatter(x=field["month_start"], y=field["water_volume"], name="Water", mode="lines"),
+    secondary_y=False,
+)
+fig2.add_trace(
+    go.Scatter(x=field["month_start"], y=field["gas_volume"], name="Gas", mode="lines"),
+    secondary_y=True,
+)
+fig2.update_yaxes(title_text="Oil / Water (Sm³ / month)", secondary_y=False)
+fig2.update_yaxes(title_text="Gas (Sm³ / month)", secondary_y=True)
 st.plotly_chart(fig2, width="stretch")
 
 st.subheader("Water injection")

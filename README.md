@@ -552,3 +552,11 @@ PostgreSQL 17 · Python 3.11 · pandas · openpyxl · psycopg2 · Jupyter
   found in every model tested: distinguishing a wellbore's first *recorded*
   row from its first *producing* row, and generating a correct
   `LAG`/`CASE` shutdown-restart query reliably.
+- Distinguish production loss from operational downtime on the "Production
+  change from peak" chart (Well Comparison): if a checkpoint's `on_stream_hrs`
+  is also well below the well's peak-day hours, surface that alongside the
+  percentage (e.g. "54% below peak at +30 days - operating hours were also
+  reduced") - the daily grain already has oil, gas, water, choke, pressure,
+  and temperature alongside on-stream hours, so this is a real signal, not
+  new data collection. Needs a defined threshold for "reduced hours" and a
+  decision on where it's surfaced (tooltip vs. table column) before building.

@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import plotly.express as px
 import streamlit as st
 
+import colors as c
 import queries as q
 
 st.title("Well Comparison")
@@ -39,6 +40,10 @@ with col_scale:
 metric_col = {"Oil": "oil_volume", "Gas": "gas_volume", "Water": "water_volume"}[metric]
 history = q.monthly_production_multi(selected_codes)
 if not history.empty:
+    # Default categorical palette, not a stream-themed monochrome scale:
+    # with up to 7 overlapping lines, telling wells apart by hue matters
+    # more here than reinforcing "this is an oil chart" - shades of one
+    # color made wells hard to distinguish once more than 2-3 were selected.
     fig0 = px.line(history, x="month_start", y=metric_col, color="wellbore_name")
     fig0.update_layout(yaxis_title=f"{metric} (Sm³ / month)", xaxis_title=None)
     if log_scale:
@@ -55,6 +60,7 @@ if not rank_selected.empty:
     fig = px.bar(
         rank_selected.sort_values("oil_rank"),
         x="wellbore_name", y="total_oil", color="wellbore_name",
+        color_discrete_sequence=c.shades(c.OIL_SCALE, rank_selected["wellbore_name"].nunique()),
     )
     fig.update_layout(yaxis_title="Cumulative oil (Sm³)", xaxis_title=None, showlegend=False)
     st.plotly_chart(fig, width="stretch")
@@ -73,6 +79,9 @@ st.caption(
 )
 profiles = q.normalized_profiles(selected_codes)
 if not profiles.empty:
+    # Default categorical palette - same reasoning as the superposed chart
+    # above, only more so: this is a dense multi-line overlay where a
+    # monochrome scale made wells nearly impossible to tell apart.
     fig2 = px.line(profiles, x="days_since_first_oil", y="pct_of_peak", color="wellbore_name")
     fig2.update_layout(yaxis_title="% of peak daily oil", xaxis_title="Days since first oil")
     st.plotly_chart(fig2, width="stretch")
@@ -84,6 +93,7 @@ st.caption("Monthly water/oil ratio per well  -  A6 generalized across wells")
 water = q.water_trends(selected_codes)
 if not water.empty:
     water["month_start"] = water["year"].astype(str) + "-" + water["month"].astype(str).str.zfill(2)
+    # Default categorical palette - same reasoning as the two charts above.
     fig3 = px.line(water, x="month_start", y="water_oil_ratio", color="wellbore_name")
     fig3.update_layout(yaxis_title="Water / oil ratio", xaxis_title=None)
     fig3.update_xaxes(type="category")

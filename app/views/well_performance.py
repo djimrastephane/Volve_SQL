@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
+import colors as c
 import queries as q
 
 st.title("Well Performance")
@@ -35,15 +36,18 @@ st.caption(
 )
 fig = make_subplots(specs=[[{"secondary_y": True}]])
 fig.add_trace(
-    go.Scatter(x=daily["production_date"], y=daily["bore_oil_vol"], name="Oil", mode="lines"),
+    go.Scatter(x=daily["production_date"], y=daily["bore_oil_vol"], name="Oil",
+               mode="lines", line=dict(color=c.OIL)),
     secondary_y=False,
 )
 fig.add_trace(
-    go.Scatter(x=daily["production_date"], y=daily["bore_wat_vol"], name="Water", mode="lines"),
+    go.Scatter(x=daily["production_date"], y=daily["bore_wat_vol"], name="Water",
+               mode="lines", line=dict(color=c.WATER)),
     secondary_y=False,
 )
 fig.add_trace(
-    go.Scatter(x=daily["production_date"], y=daily["bore_gas_vol"], name="Gas", mode="lines"),
+    go.Scatter(x=daily["production_date"], y=daily["bore_gas_vol"], name="Gas",
+               mode="lines", line=dict(color=c.GAS)),
     secondary_y=True,
 )
 fig.update_yaxes(title_text="Oil / Water (Sm³ / day)", secondary_y=False)
@@ -51,7 +55,7 @@ fig.update_yaxes(title_text="Gas (Sm³ / day)", secondary_y=True)
 st.plotly_chart(fig, width="stretch")
 
 st.subheader("Water production")
-fig2 = px.line(daily, x="production_date", y="bore_wat_vol")
+fig2 = px.line(daily, x="production_date", y="bore_wat_vol", color_discrete_sequence=[c.WATER])
 fig2.update_layout(yaxis_title="Sm³ / day", xaxis_title=None)
 st.plotly_chart(fig2, width="stretch")
 
@@ -82,7 +86,10 @@ if peak_row is not None:
         f"**{peak_row['production_date'].date()}**"
     )
 fig4 = go.Figure()
-fig4.add_trace(go.Scatter(x=daily["production_date"], y=daily["bore_oil_vol"], mode="lines", name="Daily oil"))
+fig4.add_trace(go.Scatter(
+    x=daily["production_date"], y=daily["bore_oil_vol"],
+    mode="lines", name="Daily oil", line=dict(color=c.OIL),
+))
 if peak_row is not None:
     fig4.add_trace(go.Scatter(
         x=[peak_row["production_date"]], y=[peak_row["bore_oil_vol"]],
@@ -94,7 +101,7 @@ st.plotly_chart(fig4, width="stretch")
 st.subheader("Cumulative production")
 daily_sorted = daily.sort_values("production_date").copy()
 daily_sorted["cumulative_oil"] = daily_sorted["bore_oil_vol"].fillna(0).cumsum()
-fig5 = px.area(daily_sorted, x="production_date", y="cumulative_oil")
+fig5 = px.area(daily_sorted, x="production_date", y="cumulative_oil", color_discrete_sequence=[c.OIL])
 fig5.update_layout(yaxis_title="Cumulative Sm³", xaxis_title=None)
 st.plotly_chart(fig5, width="stretch")
 

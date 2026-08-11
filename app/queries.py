@@ -203,6 +203,30 @@ def normalized_profiles(well_codes: list[int]) -> pd.DataFrame:
     return df
 
 
+def monthly_production_multi(well_codes: list[int]) -> pd.DataFrame:
+    """
+    analytics.vw_monthly_well_performance - actual (not normalized) monthly
+    production per well, on real calendar time, for superposing selected
+    wells on one chart. Complements normalized_profiles(), which indexes to
+    days-since-first-oil instead - this shows raw magnitude and calendar
+    timing side by side (e.g. whether one well was declining while another
+    was still ramping up), which a normalized view deliberately discards.
+    """
+    if not well_codes:
+        return pd.DataFrame(columns=["wellbore_name", "month_start", "oil_volume", "gas_volume", "water_volume"])
+    df = run_query(f"""
+        SELECT
+            wellbore_name,
+            make_date(year, month, 1) AS month_start,
+            oil_volume, gas_volume, water_volume, water_injection_volume
+        FROM {VIEW_MONTHLY}
+        WHERE npd_well_bore_code = ANY(%s)
+        ORDER BY wellbore_name, month_start
+    """, (well_codes,))
+    df["month_start"] = pd.to_datetime(df["month_start"])
+    return df
+
+
 def water_trends(well_codes: list[int]) -> pd.DataFrame:
     """analytics.vw_monthly_well_performance - per-well water-oil ratio, A6 generalized"""
     if not well_codes:

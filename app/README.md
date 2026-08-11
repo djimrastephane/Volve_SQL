@@ -54,12 +54,20 @@ never an LLM paraphrase of it, and the generated SQL is always shown
 
 Model choice (`OLLAMA_MODEL` in `nlsql.py`, default `qwen2.5-coder:14b`)
 was picked from a benchmark, not by assumption - see `bench_nlsql.py` and
-`bench_results.md`. Five local models were tested against a text-to-SQL
-evaluation set built from the 12 questions in `sql/06_analysis.sql`, with
-ground truth computed live from the database. `qwen2.5-coder:14b` won on
-reliability (zero hallucinated columns across 3 Qwen variants x 12
-questions) and was ~14x faster than the next-best-scoring model, for a
+`bench_results.md`. The 5 models tested (3 Qwen variants, llama3, mistral)
+were simply what happened to already be pulled on the machine this project
+was built on - not a claim that they are the best 5 models available, or
+that a different set wouldn't do better. `qwen2.5-coder:14b` won among
+*those 5* on reliability (zero hallucinated columns across 3 Qwen variants
+x 12 questions) and was ~14x faster than the next-best-scoring model, for a
 statistically tied correctness rate.
+
+The point of `bench_nlsql.py` is the method, not the specific winner: it
+turns `sql/06_analysis.sql`'s 12 questions into a reusable text-to-SQL eval
+with live-computed ground truth. Anyone with a different set of local (or
+hosted) models available should benchmark their own candidates the same
+way - `python app/bench_nlsql.py <model> [model ...]` - rather than assume
+this project's result transfers to a different model lineup.
 
 Setup: `ollama pull qwen2.5-coder:14b` (or set `OLLAMA_MODEL` to a model
 you already have), then `ollama serve`.

@@ -7,6 +7,13 @@ system rules from `app/nlsql.py` - the model is the only variable). Ground
 truth for every question is computed live from `analytics.*` at the start
 of each run, not hardcoded.
 
+The 5 models below were tested because they were already pulled on the
+machine this project was built on - this is not a claim that they are the
+5 best models available, or that this result generalizes to a different
+model lineup. The reusable part is the harness: anyone with different
+models available (local or hosted) should run their own candidates through
+the same eval set rather than assume this project's winner transfers.
+
 Run: `python app/bench_nlsql.py <model> [model ...]`
 
 ## Result
@@ -71,9 +78,14 @@ re-ranking the result. The table above is from the corrected run.
 
 ## Decision
 
-`OLLAMA_MODEL` defaults to `qwen2.5-coder:14b` (`app/nlsql.py`): correctness
-is statistically tied with qwen3:14b/8b (9/12 vs 10/12 - one question, a
-wrong month digit), it is ~14x faster (1.6s vs ~22s median - the difference
-between a usable interactive tool and a frustrating wait), and unlike the
-qwen3 variants it never failed to produce parseable SQL, even on the
-question every model got wrong in a different way (A11).
+`OLLAMA_MODEL` defaults to `qwen2.5-coder:14b` (`app/nlsql.py`) - the best
+of the 5 models tested here, not a claim that it is the best model for this
+task in general. Among these 5: correctness is statistically tied with
+qwen3:14b/8b (9/12 vs 10/12 - one question, a wrong month digit), it is
+~14x faster (1.6s vs ~22s median - the difference between a usable
+interactive tool and a frustrating wait), and unlike the qwen3 variants it
+never failed to produce parseable SQL, even on the question every model got
+wrong in a different way (A11). If you have a different set of models
+available, `python app/bench_nlsql.py <model> [model ...]` re-runs this
+same evaluation against them and `OLLAMA_MODEL` can be pointed at whichever
+wins.

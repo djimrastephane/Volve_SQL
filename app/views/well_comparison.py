@@ -18,6 +18,24 @@ selected_codes = wells.loc[
     wells["wellbore_name"].isin(selected_names), "npd_well_bore_code"
 ].astype(int).tolist()
 
+st.subheader("Production history (superposed)")
+st.caption(
+    "Actual monthly production on real calendar time, selected wells overlaid on one "
+    "chart - shows raw magnitude and timing together (e.g. one well declining while "
+    "another is still ramping up), which the normalized view below deliberately discards."
+)
+metric = st.radio(
+    "Metric", ["Oil", "Gas", "Water"], horizontal=True, key="superposed_metric"
+)
+metric_col = {"Oil": "oil_volume", "Gas": "gas_volume", "Water": "water_volume"}[metric]
+history = q.monthly_production_multi(selected_codes)
+if not history.empty:
+    fig0 = px.line(history, x="month_start", y=metric_col, color="wellbore_name")
+    fig0.update_layout(yaxis_title=f"{metric} (Sm³ / month)", xaxis_title=None)
+    st.plotly_chart(fig0, width="stretch")
+else:
+    st.caption("Select at least one well.")
+
 st.subheader("Production ranking")
 st.caption("Field-wide rank (all 7 wells), filtered to the selected wells  -  A1, A2")
 rank = q.ranking()

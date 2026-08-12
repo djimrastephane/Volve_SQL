@@ -201,12 +201,12 @@ qc_013 AS (
 daily_monthly_agg AS (
     SELECT
         npd_well_bore_code,
-        EXTRACT(YEAR FROM production_date)::int AS reference_year,
-        EXTRACT(MONTH FROM production_date)::int AS reference_month,
-        SUM(bore_oil_vol) AS oil_vol_sum,
-        SUM(bore_gas_vol) AS gas_vol_sum,
-        SUM(bore_wat_vol) AS water_vol_sum,
-        SUM(bore_wi_vol) AS water_injection_vol_sum
+        extract(YEAR FROM production_date)::int AS reference_year,
+        extract(MONTH FROM production_date)::int AS reference_month,
+        sum(bore_oil_vol) AS oil_vol_sum,
+        sum(bore_gas_vol) AS gas_vol_sum,
+        sum(bore_wat_vol) AS water_vol_sum,
+        sum(bore_wi_vol) AS water_injection_vol_sum
     FROM core.daily_production
     GROUP BY npd_well_bore_code, reference_year, reference_month
 ),

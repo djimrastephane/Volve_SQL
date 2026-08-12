@@ -103,10 +103,10 @@ SELECT
     SUM(dp.bore_gas_vol)   AS gas_volume,
     SUM(dp.bore_wat_vol)   AS water_volume,
     SUM(dp.bore_wi_vol)    AS water_injection_volume,
-    count(*) FILTER (
+    COUNT(*) FILTER (
         WHERE dp.bore_oil_vol > 0 OR dp.bore_gas_vol > 0 OR dp.bore_wat_vol > 0
     ) AS producing_days,
-    count(*) AS calendar_records
+    COUNT(*) AS calendar_records
 FROM core.daily_production dp
 JOIN core.wellbore w ON dp.npd_well_bore_code = w.npd_well_bore_code
 GROUP BY dp.npd_well_bore_code, w.npd_well_bore_name, year, month;
@@ -130,7 +130,7 @@ SELECT
     w.npd_well_bore_name AS wellbore_name,
     MIN(dp.production_date) AS first_record_date,
     MAX(dp.production_date) AS last_record_date,
-    count(*)                AS recorded_days,
+    COUNT(*)                AS recorded_days,
     SUM(dp.on_stream_hrs)   AS total_on_stream_hours,
     SUM(dp.bore_oil_vol)    AS total_oil,
     SUM(dp.bore_gas_vol)    AS total_gas,
@@ -139,10 +139,10 @@ SELECT
     MAX(dp.bore_oil_vol)    AS peak_daily_oil,
     MAX(dp.bore_gas_vol)    AS peak_daily_gas,
     MAX(dp.bore_wat_vol)    AS peak_daily_water,
-    count(*) FILTER (
+    COUNT(*) FILTER (
         WHERE dp.bore_oil_vol > 0 OR dp.bore_gas_vol > 0 OR dp.bore_wat_vol > 0
     ) AS number_of_production_days,
-    count(*) FILTER (WHERE dp.bore_wi_vol > 0) AS number_of_injection_days
+    COUNT(*) FILTER (WHERE dp.bore_wi_vol > 0) AS number_of_injection_days
 FROM core.daily_production dp
 JOIN core.wellbore w ON dp.npd_well_bore_code = w.npd_well_bore_code
 GROUP BY dp.npd_well_bore_code, w.npd_well_bore_name;
@@ -164,12 +164,12 @@ CREATE OR REPLACE VIEW analytics.vw_field_monthly_summary AS
 SELECT
     EXTRACT(YEAR FROM dp.production_date)::int  AS year,
     EXTRACT(MONTH FROM dp.production_date)::int AS month,
-    make_date(
+    MAKE_DATE(
         EXTRACT(YEAR FROM dp.production_date)::int,
         EXTRACT(MONTH FROM dp.production_date)::int,
         1
     ) AS month_start,
-    count(DISTINCT dp.npd_well_bore_code) FILTER (WHERE dp.on_stream_hrs > 0) AS active_wells,
+    COUNT(DISTINCT dp.npd_well_bore_code) FILTER (WHERE dp.on_stream_hrs > 0) AS active_wells,
     SUM(dp.bore_oil_vol) AS oil_volume,
     SUM(dp.bore_gas_vol) AS gas_volume,
     SUM(dp.bore_wat_vol) AS water_volume,

@@ -239,7 +239,7 @@ SELECT
 FROM yearly_by_well y
 JOIN yearly_totals t ON y.year = t.year
 JOIN core.wellbore w ON w.npd_well_bore_code = y.npd_well_bore_code
-ORDER BY y.year, pct_of_year_total DESC;
+ORDER BY y.year ASC, pct_of_year_total DESC;
 
 
 -- -----------------------------------------------------------------------------
@@ -292,9 +292,9 @@ transitions AS (
 )
 SELECT
     w.npd_well_bore_name AS wellbore_name,
-    count(*) FILTER (WHERE transition_type = 'shutdown') AS shutdowns,
-    count(*) FILTER (WHERE transition_type = 'restart')  AS restarts,
-    count(*) AS total_transitions
+    COUNT(*) FILTER (WHERE t.transition_type = 'shutdown') AS shutdowns,
+    COUNT(*) FILTER (WHERE t.transition_type = 'restart')  AS restarts,
+    COUNT(*) AS total_transitions
 FROM transitions t
 JOIN core.wellbore w ON w.npd_well_bore_code = t.npd_well_bore_code
 GROUP BY w.npd_well_bore_name
@@ -347,7 +347,9 @@ WITH daily_state AS (
     FROM core.daily_production
     WHERE on_stream_hrs IS NOT NULL
 ),
-flagged AS (
+-- ST03 false positive below: "flagged" is used in episode_marks (FROM flagged),
+-- a knock-on effect of the IS DISTINCT FROM parser limitation noqa'd further down.
+flagged AS (  -- noqa: ST03
     SELECT
         *,
         LAG(is_active) OVER (
@@ -358,9 +360,9 @@ flagged AS (
 episode_marks AS (
     SELECT
         *,
-        CASE
+        CASE  -- noqa: PRS
             WHEN previous_is_active IS NULL THEN 1
-            WHEN is_active IS DISTINCT FROM previous_is_active THEN 1
+            WHEN is_active IS DISTINCT FROM previous_is_active THEN 1  -- noqa: PRS
             ELSE 0
         END AS starts_new_episode
     FROM flagged
@@ -378,7 +380,7 @@ episodes AS (
         npd_well_bore_code,
         episode_id,
         is_active,
-        bool_or(previous_is_active IS NULL) AS is_first_episode,
+        BOOL_OR(previous_is_active IS NULL) AS is_first_episode,
         MIN(production_date) AS episode_start,
         MAX(production_date) AS episode_end
     FROM episode_ids
@@ -398,7 +400,7 @@ shutdowns AS (
         episode_start AS shutdown_date,
         next_episode_start AS restart_date
     FROM episodes_seq
-    WHERE is_active = false
+    WHERE is_active = FALSE
       AND NOT is_first_episode
 )
 SELECT
@@ -447,7 +449,7 @@ WITH field_monthly AS (
 wellbore_entry AS (
     SELECT
         npd_well_bore_code,
-        make_date(
+        MAKE_DATE(
             EXTRACT(YEAR FROM MIN(production_date))::int,
             EXTRACT(MONTH FROM MIN(production_date))::int,
             1

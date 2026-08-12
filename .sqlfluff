@@ -1,0 +1,30 @@
+[sqlfluff]
+dialect = postgres
+
+# This project's SQL is deliberately comment-heavy and documentation-first
+# (see sql/*.sql headers) - long explanatory trailing comments, single-line
+# CTE selects, and unaliased simple column references are intentional style
+# choices, not oversights. sqlfluff's default layout/aliasing rules fight
+# that style directly (e.g. LT05 flags every commented line over 80 chars),
+# so both rule groups are excluded rather than reformatting ~1800 lines of
+# established, readable SQL to match a generic linter's opinion.
+#
+# references.keywords (RF04) is excluded because this project keeps source
+# column names verbatim in raw/analytics contexts (e.g. year, month, from
+# the source "Year"/"Month" columns) - see sql/02_create_tables.sql's own
+# naming-convention header. That's a deliberate traceability decision, not
+# an accidental keyword collision.
+#
+# capitalisation.types (CP05) is excluded because this project uses two
+# different, individually consistent conventions on purpose: uppercase for
+# typed literals (DATE '2008-01-01', 6/6 occurrences project-wide) and
+# lowercase for casts (::int, ::text, 42/42 occurrences project-wide).
+# sqlfluff's single "datatypes" bucket can't tell those apart and flags the
+# DATE literals as inconsistent with the casts, which they were never
+# meant to match.
+#
+# ambiguous.join (AM05) and structure.join_condition_order/column_order
+# (ST09/ST06) are excluded as style preferences (fully-qualifying every
+# join column, fixed join/column ordering) this project doesn't follow and
+# that would require rewriting working queries with no correctness benefit.
+exclude_rules = layout, aliasing, references.keywords, capitalisation.types, ambiguous.join, structure.join_condition_order, structure.column_order

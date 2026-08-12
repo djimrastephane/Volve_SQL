@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  sql-lint:
+    name: SQL lint (sqlfluff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install sqlfluff==4.3.0
+      - run: sqlfluff lint sql/
+
+  sql-schema-apply:
+    name: Apply schema to PostgreSQL (dry run, no data)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      # Applies every sql/NN_*.sql file in order against a fresh, empty
+      # database - the raw Excel source data is licensed and not
+      # redistributed (see data/README.md), so this validates that the
+      # schema/views/checks/role-grants all apply cleanly end-to-end, not
+      # that the data-dependent contents of 04_quality_checks.sql pass.
+      - name: Apply sql/*.sql in order
+        env:
+          PGPASSWORD: postgres
+        run: |
+          for f in sql/01_create_schemas.sql sql/02_create_tables.sql \
+                   sql/03_create_indexes.sql sql/04_quality_checks.sql \
+                   sql/05_views.sql sql/06_analysis.sql sql/07_app_role.sql; do
+            echo "::group::$f"
+            psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$f"
+            echo "::endgroup::"
+          done
+
+  python-syntax:
+    name: Python syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # No test suite exists yet - this is a cheap floor, not a substitute
+      # for one: catches a syntax error before it reaches main, nothing more.
+      - run: python -m py_compile app/*.py app/views/*.py src/*.py

@@ -59,8 +59,10 @@ if selected_issue:
         fig3 = px.bar(by_date, x="month", y="record_count")
         fig3.update_layout(title="Affected dates (by month)", yaxis_title="Records", xaxis_title=None)
         st.plotly_chart(fig3, width="stretch")
+    detail_display = detail.copy()
+    detail_display["production_date"] = detail_display["production_date"].dt.date
     st.dataframe(
-        detail.rename(columns={
+        detail_display.rename(columns={
             "wellbore_name": "Well", "production_date": "Date", "review_reason": "Reason",
         }),
         width="stretch", hide_index=True,

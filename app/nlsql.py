@@ -43,6 +43,13 @@ analytics.vw_daily_well_performance
     avg_downhole_pressure, avg_downhole_temperature, avg_dp_tubing,
     avg_annulus_press, avg_choke_size_p, avg_whp_p, avg_wht_p, dp_choke_size,
     is_active (boolean, true when on_stream_hrs > 0, NULL when on_stream_hrs IS NULL)
+  well_type and flow_kind are per-day, NOT a fixed attribute of a well - 2 of
+  this field's 7 wells show both 'OP' and 'WI' on different days (one
+  briefly, one for a real 144-day early period before it became an
+  injector). Neither column exists on any other view. A question about a
+  well's overall type ("which wells are producers/injectors") needs each
+  well's DOMINANT type (the value with the most days for that well), not
+  DISTINCT well_type per well - see the few-shot example below.
 
 analytics.vw_monthly_well_performance
   one row per (npd_well_bore_code, year, month)
@@ -76,6 +83,17 @@ analytics.vw_data_quality_review
 """
 
 FEW_SHOT = [
+    (
+        "Which wells are producers and which are injectors?",
+        "WITH type_counts AS ("
+        "  SELECT npd_well_bore_code, wellbore_name, well_type, count(*) AS n "
+        "  FROM analytics.vw_daily_well_performance "
+        "  GROUP BY npd_well_bore_code, wellbore_name, well_type"
+        ") "
+        "SELECT DISTINCT ON (npd_well_bore_code) wellbore_name, well_type AS dominant_well_type "
+        "FROM type_counts "
+        "ORDER BY npd_well_bore_code, n DESC",
+    ),
     (
         "Which well produced the most oil?",
         "SELECT wellbore_name, total_oil FROM analytics.vw_well_lifetime_summary "

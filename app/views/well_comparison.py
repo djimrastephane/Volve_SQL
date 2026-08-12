@@ -264,8 +264,8 @@ with injectors_tab:
     st.caption(
         "Field-wide rank (all 7 wells), filtered to the selected wells - ranked by "
         "cumulative water injection. Oil/gas/water columns are also shown in the table "
-        "for transparency - 15/9-F-5's are real, 15/9-F-4's are blank because it never "
-        "produces either. Click a row to open that well on Well Performance."
+        "for transparency - 15/9-F-5's are real, 15/9-F-4's show \"None\" because it "
+        "never produces either. Click a row to open that well on Well Performance."
     )
     rank_inj = q.ranking()
     rank_selected_inj = rank_inj[rank_inj["wellbore_name"].isin(selected_names_inj)]

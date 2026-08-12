@@ -69,16 +69,30 @@ def list_wells() -> pd.DataFrame:
     return df
 
 
-def field_kpis() -> pd.DataFrame:
-    """analytics.vw_well_lifetime_summary - field-wide cumulative totals"""
-    return run_query(f"""
-        SELECT
-            SUM(total_oil)             AS total_oil,
-            SUM(total_gas)             AS total_gas,
-            SUM(total_water)           AS total_water,
-            SUM(total_water_injection) AS total_water_injection
+def field_kpis_by_type() -> pd.DataFrame:
+    """
+    analytics.vw_well_lifetime_summary + list_wells() - field-wide cumulative
+    totals split by well type (dominant type per well, same classification
+    used everywhere else in this app). The 2 injectors aren't purely water
+    injection:
+    15/9-F-5 has a real 129-day producing period before it became an
+    injector, so its oil/gas/water contribute a real, non-trivial residual
+    to the injector totals here (~41K Sm3 oil) - shown, not netted out.
+    min_count=1 so an all-NULL group sums to NULL, not 0 (e.g. if producers
+    never inject at all).
+    """
+    lifetime = run_query(f"""
+        SELECT npd_well_bore_code, total_oil, total_gas, total_water, total_water_injection
         FROM {VIEW_LIFETIME}
     """)
+    wells = list_wells()
+    merged = lifetime.merge(wells[["npd_well_bore_code", "well_type_label"]], on="npd_well_bore_code")
+    return (
+        merged.groupby("well_type_label")[["total_oil", "total_gas", "total_water", "total_water_injection"]]
+        .sum(min_count=1)
+        .reset_index()
+        .rename(columns={"well_type_label": "well_type"})
+    )
 
 
 def field_monthly() -> pd.DataFrame:

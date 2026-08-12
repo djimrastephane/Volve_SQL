@@ -12,14 +12,27 @@ import colors as c
 import queries as q
 
 st.title("Field Overview")
-st.caption("Whole-field view, all 7 wellbores combined.")
+st.caption("Whole-field view - 7 wellbores: 5 oil producers, 2 water injectors.")
 
-kpis = q.field_kpis().iloc[0]
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Cumulative oil (Sm³)", f"{kpis['total_oil']:,.0f}")
-c2.metric("Cumulative gas (Sm³)", f"{kpis['total_gas']:,.0f}")
-c3.metric("Cumulative water produced (Sm³)", f"{kpis['total_water']:,.0f}")
-c4.metric("Cumulative water injected (Sm³)", f"{kpis['total_water_injection']:,.0f}")
+kpis_by_type = q.field_kpis_by_type().set_index("well_type")
+producer_kpis = kpis_by_type.loc["Producer"]
+injector_kpis = kpis_by_type.loc["Injector"]
+
+st.markdown("**Producers**  (5 wells)")
+p1, p2, p3 = st.columns(3)
+p1.metric("Cumulative oil (Sm³)", f"{producer_kpis['total_oil']:,.0f}")
+p2.metric("Cumulative gas (Sm³)", f"{producer_kpis['total_gas']:,.0f}")
+p3.metric("Cumulative water produced (Sm³)", f"{producer_kpis['total_water']:,.0f}")
+
+st.markdown("**Injectors**  (2 wells)")
+st.metric("Cumulative water injected (Sm³)", f"{injector_kpis['total_water_injection']:,.0f}")
+st.caption(
+    f"Also a real residual of {injector_kpis['total_oil']:,.0f} Sm³ oil, "
+    f"{injector_kpis['total_gas']:,.0f} Sm³ gas, and {injector_kpis['total_water']:,.0f} Sm³ "
+    "water produced - not a data error. 15/9-F-5 has a genuine 129-day "
+    "producing period before it became an injector (see Well Comparison's "
+    "Injectors tab)."
+)
 st.caption(f"Source: `{q.VIEW_LIFETIME}`")
 
 field = q.field_monthly()

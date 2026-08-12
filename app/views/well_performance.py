@@ -172,20 +172,22 @@ st.caption(
        if still_down else "")
 )
 
-st.header("Water performance")
-st.caption("Raw water rate alongside the water/oil ratio it produces - A6 for this well.")
-wc1, wc2 = st.columns(2)
-with wc1:
-    fig2 = px.line(daily, x="production_date", y="bore_wat_vol", color_discrete_sequence=[c.WATER])
-    fig2.update_layout(yaxis_title="Water (Sm³ / day)", xaxis_title=None)
-    st.plotly_chart(fig2, width="stretch")
-with wc2:
-    if not monthly_wor.empty:
-        fig_wor = px.line(monthly_wor, x="month_start", y="water_oil_ratio", color_discrete_sequence=[c.WATER])
-        fig_wor.update_layout(yaxis_title="Water / oil ratio (monthly)", xaxis_title=None)
-        st.plotly_chart(fig_wor, width="stretch")
-    else:
-        st.caption("No monthly oil/water data for this well.")
+has_water_production = daily["bore_wat_vol"].notna().any()
+if has_water_production:
+    st.header("Water performance")
+    st.caption("Raw water rate alongside the water/oil ratio it produces - A6 for this well.")
+    wc1, wc2 = st.columns(2)
+    with wc1:
+        fig2 = px.line(daily, x="production_date", y="bore_wat_vol", color_discrete_sequence=[c.WATER])
+        fig2.update_layout(yaxis_title="Water (Sm³ / day)", xaxis_title=None)
+        st.plotly_chart(fig2, width="stretch")
+    with wc2:
+        if monthly_wor["water_oil_ratio"].notna().any():
+            fig_wor = px.line(monthly_wor, x="month_start", y="water_oil_ratio", color_discrete_sequence=[c.WATER])
+            fig_wor.update_layout(yaxis_title="Water / oil ratio (monthly)", xaxis_title=None)
+            st.plotly_chart(fig_wor, width="stretch")
+        else:
+            st.caption("No monthly oil/water data for this well.")
 
 has_pressure = daily["avg_downhole_pressure"].notna().any()
 if has_pressure:

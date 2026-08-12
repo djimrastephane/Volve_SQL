@@ -107,6 +107,20 @@ jobs:
                    sql/03_create_indexes.sql sql/05_views.sql sql/07_app_role.sql; do
             psql -h localhost -U postgres -d volve_analytics -v ON_ERROR_STOP=1 -f "$f"
           done
+      # sql/07_app_role.sql deliberately creates volve_app with no
+      # password, since local Homebrew Postgres (this project's actual
+      # dev environment) uses trust auth for local connections - see that
+      # file's own comment. The official postgres:17 image this job uses
+      # requires password auth for every role, with no exception, so
+      # volve_app needs one here to be connectable at all. Matches the
+      # same PGPASSWORD used everywhere else in this job for simplicity;
+      # psycopg2/libpq picks it up automatically for any connection that
+      # doesn't pass an explicit password (app/db.py and tests/conftest.py
+      # both connect as volve_app this way), so nothing else changes.
+      - name: Set a password for volve_app (CI only - see comment)
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d volve_analytics -v ON_ERROR_STOP=1 -c "ALTER ROLE volve_app WITH PASSWORD 'postgres'"
       - name: Generate the synthetic fixture
         run: python tests/fixtures/generate_sample_workbook.py /tmp/sample_workbook.xlsx
       - name: Load the fixture through src/load_postgres.py

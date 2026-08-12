@@ -155,7 +155,17 @@ _NON_ANALYTICS_SCHEMA = re.compile(
 
 
 class NLSQLError(Exception):
-    """Raised when the model can't be reached, or its output fails validation."""
+    """
+    Raised when the model can't be reached, its output fails validation, or
+    the generated SQL fails to execute. sql carries the generated statement
+    whenever one was actually produced, even though the call failed - without
+    it, "View SQL (rejected)" had nothing to show for any failure, silently
+    contradicting the page's own transparency claim.
+    """
+
+    def __init__(self, message: str, sql: str | None = None):
+        super().__init__(message)
+        self.sql = sql
 
 
 def _build_prompt(question: str) -> str:
@@ -213,7 +223,11 @@ def generate_sql(question: str, model: str = OLLAMA_MODEL, timeout: int = 90) ->
         ) from exc
 
     sql = _clean_sql(resp.json()["response"])
-    _validate_sql(sql)
+    try:
+        _validate_sql(sql)
+    except NLSQLError as exc:
+        exc.sql = sql
+        raise
     return sql
 
 
@@ -222,7 +236,15 @@ def source_views(sql: str) -> list[str]:
 
 
 def ask(question: str):
-    """Returns (sql, dataframe). Raises NLSQLError if generation or validation fails."""
+    """
+    Returns (sql, dataframe). Raises NLSQLError if generation, validation, or
+    execution fails - exc.sql carries the generated statement whenever one
+    was produced, even on failure, so the caller can always show what was
+    tried, not just that it failed.
+    """
     sql = generate_sql(question)
-    df = run_query(sql)
+    try:
+        df = run_query(sql)
+    except Exception as exc:
+        raise NLSQLError(f"Query failed: {exc}", sql=sql) from exc
     return sql, df

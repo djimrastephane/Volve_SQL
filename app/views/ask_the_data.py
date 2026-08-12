@@ -33,8 +33,7 @@ if st.button("Ask", type="primary") and question:
             sql, df = nlsql.ask(question)
         except nlsql.NLSQLError as exc:
             error = str(exc)
-        except Exception as exc:  # query executed but failed in Postgres
-            error = f"Query failed: {exc}"
+            sql = exc.sql
 
     if error:
         st.error(error)

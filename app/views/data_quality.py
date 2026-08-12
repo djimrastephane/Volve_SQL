@@ -59,13 +59,19 @@ if selected_issue:
         fig3 = px.bar(by_date, x="month", y="record_count")
         fig3.update_layout(title="Affected dates (by month)", yaxis_title="Records", xaxis_title=None)
         st.plotly_chart(fig3, width="stretch")
+    st.caption("Click a row to open that well on Well Performance.")
     detail_display = detail.copy()
     detail_display["production_date"] = detail_display["production_date"].dt.date
-    st.dataframe(
+    detail_event = st.dataframe(
         detail_display.rename(columns={
             "wellbore_name": "Well", "production_date": "Date", "review_reason": "Reason",
         }),
         width="stretch", hide_index=True,
+        on_select="rerun", selection_mode="single-row",
     )
+    if detail_event.selection.rows:
+        selected_well = detail_display.iloc[detail_event.selection.rows[0]]["wellbore_name"]
+        st.session_state["well_performance_select"] = selected_well
+        st.switch_page("views/well_performance.py")
 
 st.caption(f"Source: `{q.VIEW_DQ}`")

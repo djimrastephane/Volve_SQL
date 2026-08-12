@@ -73,7 +73,10 @@ with producers_tab:
         st.caption("Select at least one well.")
 
     st.subheader("Production ranking")
-    st.caption("Field-wide rank (all 7 wells), filtered to the selected wells  -  A1, A2")
+    st.caption(
+        "Field-wide rank (all 7 wells), filtered to the selected wells  -  A1, A2. "
+        "Click a row to open that well on Well Performance."
+    )
     rank = q.ranking()
     rank_selected = rank[rank["wellbore_name"].isin(selected_names)]
     if not rank_selected.empty:
@@ -84,7 +87,7 @@ with producers_tab:
         )
         fig.update_layout(yaxis_title="Cumulative oil (Sm³)", xaxis_title=None, showlegend=False)
         st.plotly_chart(fig, width="stretch")
-        st.dataframe(
+        rank_event = st.dataframe(
             rank_selected[["wellbore_name", "total_oil", "oil_rank", "total_gas", "gas_rank",
                             "total_water", "water_rank"]].rename(columns={
                 "wellbore_name": "Well", "total_oil": "Cumulative oil (Sm³)", "oil_rank": "Oil rank",
@@ -92,12 +95,17 @@ with producers_tab:
                 "total_water": "Cumulative water (Sm³)", "water_rank": "Water rank",
             }),
             width="stretch", hide_index=True,
+            on_select="rerun", selection_mode="single-row",
             column_config={
                 "Cumulative oil (Sm³)": st.column_config.NumberColumn(format="%,.0f"),
                 "Cumulative gas (Sm³)": st.column_config.NumberColumn(format="%,.0f"),
                 "Cumulative water (Sm³)": st.column_config.NumberColumn(format="%,.0f"),
             },
         )
+        if rank_event.selection.rows:
+            selected_well = rank_selected.iloc[rank_event.selection.rows[0]]["wellbore_name"]
+            st.session_state["well_performance_select"] = selected_well
+            st.switch_page("views/well_performance.py")
     else:
         st.caption("Select at least one well.")
 
@@ -257,7 +265,7 @@ with injectors_tab:
         "Field-wide rank (all 7 wells), filtered to the selected wells - ranked by "
         "cumulative water injection. Oil/gas/water columns are also shown in the table "
         "for transparency - 15/9-F-5's are real, 15/9-F-4's are blank because it never "
-        "produces either."
+        "produces either. Click a row to open that well on Well Performance."
     )
     rank_inj = q.ranking()
     rank_selected_inj = rank_inj[rank_inj["wellbore_name"].isin(selected_names_inj)]
@@ -269,7 +277,7 @@ with injectors_tab:
         )
         fig_rank_inj.update_layout(yaxis_title="Cumulative water injection (Sm³)", xaxis_title=None, showlegend=False)
         st.plotly_chart(fig_rank_inj, width="stretch")
-        st.dataframe(
+        rank_inj_event = st.dataframe(
             rank_selected_inj[["wellbore_name", "total_water_injection", "injection_rank",
                                 "total_oil", "oil_rank", "total_gas", "gas_rank",
                                 "total_water", "water_rank"]].rename(columns={
@@ -280,6 +288,7 @@ with injectors_tab:
                 "total_water": "Cumulative water (Sm³)", "water_rank": "Water rank",
             }),
             width="stretch", hide_index=True,
+            on_select="rerun", selection_mode="single-row",
             column_config={
                 "Cumulative water injection (Sm³)": st.column_config.NumberColumn(format="%,.0f"),
                 "Cumulative oil (Sm³)": st.column_config.NumberColumn(format="%,.0f"),
@@ -287,6 +296,10 @@ with injectors_tab:
                 "Cumulative water (Sm³)": st.column_config.NumberColumn(format="%,.0f"),
             },
         )
+        if rank_inj_event.selection.rows:
+            selected_well = rank_selected_inj.iloc[rank_inj_event.selection.rows[0]]["wellbore_name"]
+            st.session_state["well_performance_select"] = selected_well
+            st.switch_page("views/well_performance.py")
     else:
         st.caption("Select at least one well.")
 

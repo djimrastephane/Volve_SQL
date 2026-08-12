@@ -15,7 +15,12 @@ import queries as q
 st.title("Well Performance")
 
 wells = q.list_wells()
-well_name = st.selectbox("Select well", wells["wellbore_name"], key="well_performance_select")
+well_type_by_name = dict(zip(wells["wellbore_name"], wells["well_type_label"]))
+well_name = st.selectbox(
+    "Select well", wells["wellbore_name"],
+    format_func=lambda name: f"{name} ({well_type_by_name[name]})",
+    key="well_performance_select",
+)
 well_code = int(wells.loc[wells["wellbore_name"] == well_name, "npd_well_bore_code"].iloc[0])
 
 lifetime = q.well_lifetime(well_code).iloc[0]

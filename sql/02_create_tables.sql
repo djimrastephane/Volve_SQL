@@ -165,7 +165,7 @@ COMMENT ON COLUMN core.wellbore.npd_field_code IS
     'Folded in from the daily source rather than a separate field dimension - see table comment. Single value (3420717 / VOLVE) for the entire dataset (Section 8).';
 
 COMMENT ON COLUMN core.wellbore.npd_facility_code IS
-    'Folded in from the daily source rather than a separate facility dimension - see table comment. Single value (369304 / MAERSK INSPIRER) for the entire dataset (Section 8).';
+    'Folded in from the daily source rather than a separate facility dimension - see table comment. Single value (369304 / MÆRSK INSPIRER) for the entire dataset (Section 8).';
 
 
 -- -----------------------------------------------------------------------------

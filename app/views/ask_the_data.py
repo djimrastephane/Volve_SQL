@@ -3,6 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pandas as pd
 import streamlit as st
 
 import nlsql
@@ -50,7 +51,9 @@ if st.button("Ask", type="primary") and question:
             for col_widget, col_name in zip(cols, df.columns):
                 value = row[col_name]
                 label = col_name.replace("_", " ").title()
-                if isinstance(value, float):
+                if pd.isna(value):
+                    col_widget.metric(label, "n/a")
+                elif isinstance(value, float):
                     col_widget.metric(label, f"{value:,.2f}")
                 elif isinstance(value, int):
                     col_widget.metric(label, f"{value:,}")

@@ -18,20 +18,46 @@ kpis_by_type = q.field_kpis_by_type().set_index("well_type")
 producer_kpis = kpis_by_type.loc["Producer"]
 injector_kpis = kpis_by_type.loc["Injector"]
 
+# oil_rank/injection_rank are computed field-wide (A1/A2), but producers so
+# dominate oil (and injectors water injection) that rank 1 in each is always
+# the top well of that type - no separate producer/injector-scoped query
+# needed.
+rank = q.ranking()
+top_producer = rank.loc[rank["oil_rank"] == 1].iloc[0]
+top_injector = rank.loc[rank["injection_rank"] == 1].iloc[0]
+top_producer_share = 100 * top_producer["total_oil"] / producer_kpis["total_oil"]
+top_injector_share = 100 * top_injector["total_water_injection"] / injector_kpis["total_water_injection"]
+
 st.markdown("**Producers**  (5 wells)")
-p1, p2, p3 = st.columns(3)
+p1, p2, p3, p4 = st.columns(4)
 p1.metric("Cumulative oil (Sm³)", f"{producer_kpis['total_oil']:,.0f}")
 p2.metric("Cumulative gas (Sm³)", f"{producer_kpis['total_gas']:,.0f}")
 p3.metric("Cumulative water produced (Sm³)", f"{producer_kpis['total_water']:,.0f}")
+p4.metric(
+    "Top producer", top_producer["wellbore_name"],
+    help=f"{top_producer['total_oil']:,.0f} Sm³ - {top_producer_share:.0f}% of producers' cumulative oil.",
+)
 
 st.markdown("**Injectors**  (2 wells)")
-st.metric("Cumulative water injected (Sm³)", f"{injector_kpis['total_water_injection']:,.0f}")
+i1, i2 = st.columns(2)
+i1.metric("Cumulative water injected (Sm³)", f"{injector_kpis['total_water_injection']:,.0f}")
+i2.metric(
+    "Top injector", top_injector["wellbore_name"],
+    help=f"{top_injector['total_water_injection']:,.0f} Sm³ - {top_injector_share:.0f}% of injectors' cumulative water injected.",
+)
 st.caption(
     f"Also a real residual of {injector_kpis['total_oil']:,.0f} Sm³ oil, "
     f"{injector_kpis['total_gas']:,.0f} Sm³ gas, and {injector_kpis['total_water']:,.0f} Sm³ "
     "water produced - not a data error. 15/9-F-5 has a genuine 129-day "
     "producing period before it became an injector (see Well Comparison's "
     "Injectors tab)."
+)
+st.caption(
+    f"{top_producer['wellbore_name']} alone accounts for {top_producer_share:.0f}% of "
+    f"producers' cumulative oil, vs {top_injector['wellbore_name']}'s {top_injector_share:.0f}% "
+    "of injectors' cumulative water injected - producers contribute far less "
+    "equally than injectors do (hover a \"Top\" metric above for the exact "
+    "volume behind each share)."
 )
 st.caption(f"Source: `{q.VIEW_LIFETIME}`")
 

@@ -69,30 +69,105 @@ def list_wells() -> pd.DataFrame:
     return df
 
 
-def field_kpis_by_type() -> pd.DataFrame:
+def field_lifetime_summary() -> pd.DataFrame:
     """
-    analytics.vw_well_lifetime_summary + list_wells() - field-wide cumulative
-    totals split by well type (dominant type per well, same classification
-    used everywhere else in this app). The 2 injectors aren't purely water
-    injection:
-    15/9-F-5 has a real 129-day producing period before it became an
-    injector, so its oil/gas/water contribute a real, non-trivial residual
-    to the injector totals here (~41K Sm3 oil) - shown, not netted out.
-    min_count=1 so an all-NULL group sums to NULL, not 0 (e.g. if producers
-    never inject at all).
+    analytics.vw_daily_well_performance + vw_well_lifetime_summary -
+    field-wide (all 7 wellbores) top-line KPIs: cumulative oil/gas/water/
+    water-injection, the field's peak DAILY oil rate (summed across all
+    wells reporting that day) and the date it happened, and the recorded
+    field life span. Peak rate is a daily figure, not monthly - "peak field
+    oil rate" reads as a rate, and daily is the finest grain this project
+    otherwise reports rates at (matches peak_daily_oil on
+    vw_well_lifetime_summary).
     """
-    lifetime = run_query(f"""
-        SELECT npd_well_bore_code, total_oil, total_gas, total_water, total_water_injection
+    totals = run_query(f"""
+        SELECT
+            SUM(total_oil) AS total_oil, SUM(total_gas) AS total_gas,
+            SUM(total_water) AS total_water, SUM(total_water_injection) AS total_water_injection,
+            MIN(first_record_date) AS first_record_date, MAX(last_record_date) AS last_record_date
         FROM {VIEW_LIFETIME}
     """)
-    wells = list_wells()
-    merged = lifetime.merge(wells[["npd_well_bore_code", "well_type_label"]], on="npd_well_bore_code")
-    return (
-        merged.groupby("well_type_label")[["total_oil", "total_gas", "total_water", "total_water_injection"]]
-        .sum(min_count=1)
-        .reset_index()
-        .rename(columns={"well_type_label": "well_type"})
-    )
+    peak = run_query(f"""
+        SELECT production_date AS peak_date, SUM(bore_oil_vol) AS peak_oil_rate
+        FROM {VIEW_DAILY}
+        WHERE bore_oil_vol IS NOT NULL
+        GROUP BY production_date
+        ORDER BY peak_oil_rate DESC
+        LIMIT 1
+    """)
+    row = pd.concat([totals.iloc[0], peak.iloc[0]])
+    row["field_life_years"] = (row["last_record_date"] - row["first_record_date"]).days / 365.25
+    return row
+
+
+def field_availability_monthly() -> pd.DataFrame:
+    """
+    analytics.vw_daily_well_performance - field-wide monthly availability:
+    on-stream hours as a % of possible hours across (well, day) rows with a
+    known state that month. Days with no on-stream-hours reading are
+    excluded from the denominator, not counted as inactive - same
+    methodology as well_availability(), generalized to the whole field so
+    it can sit alongside the Active wells chart. A well not yet drilled (or
+    already decommissioned) contributes no rows at all that month, so it
+    doesn't drag this down the way a fixed "7 wells x 24h" denominator
+    would.
+    """
+    df = run_query(f"""
+        SELECT
+            make_date(
+                EXTRACT(YEAR FROM production_date)::int,
+                EXTRACT(MONTH FROM production_date)::int, 1
+            ) AS month_start,
+            SUM(on_stream_hrs) AS total_hours,
+            COUNT(*) AS known_hours_days
+        FROM {VIEW_DAILY}
+        WHERE on_stream_hrs IS NOT NULL
+        GROUP BY month_start
+        ORDER BY month_start
+    """)
+    df["month_start"] = pd.to_datetime(df["month_start"])
+    df["availability_pct"] = 100 * df["total_hours"] / (df["known_hours_days"] * 24)
+    return df
+
+
+def well_summary() -> pd.DataFrame:
+    """
+    analytics.vw_daily_well_performance + vw_well_lifetime_summary +
+    list_wells() - one row per well: first oil day, peak daily oil and the
+    date it happened, cumulative oil, that well's % of the field's total
+    oil (A1/A2 generalized), and availability (well_availability(),
+    computed set-based here for all 7 wells in one query rather than one
+    round trip per well). Feeds both the Well Contribution chart and the
+    Well Summary table on Field Overview.
+    """
+    first_oil = run_query(f"""
+        SELECT npd_well_bore_code, MIN(production_date) AS first_oil_date
+        FROM {VIEW_DAILY} WHERE bore_oil_vol > 0
+        GROUP BY npd_well_bore_code
+    """)
+    peak = run_query(f"""
+        SELECT DISTINCT ON (npd_well_bore_code)
+            npd_well_bore_code, production_date AS peak_date, bore_oil_vol AS peak_oil
+        FROM {VIEW_DAILY}
+        WHERE bore_oil_vol IS NOT NULL
+        ORDER BY npd_well_bore_code, bore_oil_vol DESC
+    """)
+    availability = run_query(f"""
+        SELECT npd_well_bore_code,
+            ROUND(100.0 * SUM(on_stream_hrs) / (COUNT(*) * 24), 1) AS availability_pct
+        FROM {VIEW_DAILY}
+        WHERE on_stream_hrs IS NOT NULL
+        GROUP BY npd_well_bore_code
+    """)
+    lifetime = run_query(f"SELECT npd_well_bore_code, wellbore_name, total_oil FROM {VIEW_LIFETIME}")
+
+    df = lifetime.merge(first_oil, on="npd_well_bore_code", how="left")
+    df = df.merge(peak, on="npd_well_bore_code", how="left")
+    df = df.merge(availability, on="npd_well_bore_code", how="left")
+    df["first_oil_date"] = pd.to_datetime(df["first_oil_date"])
+    df["peak_date"] = pd.to_datetime(df["peak_date"])
+    df["oil_pct_of_field"] = 100 * df["total_oil"] / df["total_oil"].sum()
+    return df.sort_values("total_oil", ascending=False, na_position="last")
 
 
 def field_monthly() -> pd.DataFrame:

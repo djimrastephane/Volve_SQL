@@ -56,6 +56,11 @@ if result:
             cols = st.columns(len(df.columns))
             for col_widget, col_name in zip(cols, df.columns):
                 value = row[col_name]
+                # SQL integer/numeric aggregates (e.g. count(*)) come back as
+                # numpy.int64/float64, which are NOT instances of Python's
+                # int/float - .item() converts to the native Python type so
+                # the isinstance checks below actually match.
+                value = value.item() if hasattr(value, "item") else value
                 label = col_name.replace("_", " ").title()
                 if pd.isna(value):
                     col_widget.metric(label, "n/a")

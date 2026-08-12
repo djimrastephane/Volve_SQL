@@ -140,6 +140,7 @@ st.caption(
     "on Well Performance's per-well Production history chart."
 )
 profiles = q.normalized_profiles(selected_codes)
+never_produced = sorted(set(selected_names) - set(profiles["wellbore_name"].unique()))
 if not profiles.empty:
     profiles = profiles.sort_values(["wellbore_name", "days_since_first_oil"]).copy()
     profiles["pct_of_peak_smoothed"] = (
@@ -156,13 +157,26 @@ if not profiles.empty:
         legend_title_text="Well",
     )
     st.plotly_chart(fig2, width="stretch")
+    if never_produced:
+        st.caption(f"Not shown, never produces oil: {', '.join(never_produced)}.")
 else:
-    st.caption("No oil-producing history for the selected wells.")
+    st.caption(
+        "No oil-producing history for the selected wells"
+        + (f": {', '.join(never_produced)}." if never_produced else ".")
+    )
 
 st.subheader("Water trends")
 st.caption("Monthly water/oil ratio per well  -  A6 generalized across wells")
 water = q.water_trends(selected_codes)
-if not water.empty:
+# A well with zero oil production ever has an undefined ratio every month
+# (NULLIF makes the denominator NULL, not zero) - it would otherwise still
+# show in the legend with no visible line, since the row exists even
+# though every value is NULL. Drop it before plotting, not just visually
+# hide it, so the legend only lists wells the chart actually shows.
+has_ratio = water.groupby("wellbore_name")["water_oil_ratio"].apply(lambda s: s.notna().any())
+water_plot = water[water["wellbore_name"].isin(has_ratio[has_ratio].index)]
+never_produced_water = sorted(set(selected_names) - set(water_plot["wellbore_name"].unique()))
+if not water_plot.empty:
     # Real date axis, not a categorical string month label - the previous
     # version forced type="category" on a "YYYY-MM" string, which put one
     # tick per calendar month (up to ~100+ across 9 years x 7 wells) instead
@@ -171,12 +185,17 @@ if not water.empty:
     # readability problem, not the ratio values themselves (verified live:
     # they genuinely reach ~25-30 late in some wells' lives - real rising
     # water cut, not division-by-near-zero noise).
-    fig3 = px.line(water, x="month_start", y="water_oil_ratio", color="wellbore_name",
+    fig3 = px.line(water_plot, x="month_start", y="water_oil_ratio", color="wellbore_name",
                     color_discrete_map=well_color_map)
     fig3.update_layout(yaxis_title="Water / oil ratio", xaxis_title=None, legend_title_text="Well")
     st.plotly_chart(fig3, width="stretch")
+    if never_produced_water:
+        st.caption(f"Not shown, never produces oil (ratio undefined): {', '.join(never_produced_water)}.")
 else:
-    st.caption("No monthly data for the selected wells.")
+    st.caption(
+        "No monthly data for the selected wells"
+        + (f": {', '.join(never_produced_water)} never produce oil." if never_produced_water else ".")
+    )
 
 st.subheader("Production change from peak")
 st.caption(
@@ -191,6 +210,7 @@ st.caption(
     "exact peak and checkpoint volumes behind each percentage."
 )
 decl = q.decline(selected_codes)
+never_produced_decl = sorted(set(selected_names) - set(decl["wellbore_name"].unique()))
 if not decl.empty:
     st.dataframe(
         decl.rename(columns={
@@ -236,7 +256,12 @@ if not decl.empty:
     )
     fig4.update_layout(yaxis_title="% below peak", xaxis_title=None, legend_title_text="Checkpoint")
     st.plotly_chart(fig4, width="stretch")
+    if never_produced_decl:
+        st.caption(f"Not shown, never produces oil (no peak day to compare against): {', '.join(never_produced_decl)}.")
 else:
-    st.caption("No oil-producing history for the selected wells.")
+    st.caption(
+        "No oil-producing history for the selected wells"
+        + (f": {', '.join(never_produced_decl)}." if never_produced_decl else ".")
+    )
 
 st.caption(f"Source: `{q.VIEW_LIFETIME}`, `{q.VIEW_DAILY}`, `{q.VIEW_MONTHLY}`")

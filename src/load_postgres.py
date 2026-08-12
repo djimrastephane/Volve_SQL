@@ -1,3 +1,4 @@
+
 """
 load_postgres.py
 
@@ -44,7 +45,13 @@ from psycopg2.extras import execute_values
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-WORKBOOK_PATH = PROJECT_ROOT / "data" / "raw" / "Volve production data.xlsx"
+# Overridable so this same script can load a different fixed snapshot -
+# e.g. tests/fixtures/generate_sample_workbook.py's tiny synthetic
+# workbook - without ever writing into data/raw/, which may hold the real
+# licensed workbook on a developer's machine (see data/README.md).
+WORKBOOK_PATH = Path(os.environ.get(
+    "VOLVE_WORKBOOK_PATH", str(PROJECT_ROOT / "data" / "raw" / "Volve production data.xlsx")
+))
 
 DAILY_SHEET = "Daily Production Data"
 MONTHLY_SHEET = "Monthly Production Data"
@@ -54,6 +61,17 @@ MONTHLY_SHEET = "Monthly Production Data"
 # defaults `psql -d volve_analytics` already relies on. Only the database
 # name is a project-specific default, overridable via VOLVE_DB_NAME.
 DB_NAME = os.environ.get("VOLVE_DB_NAME", "volve_analytics")
+
+# validate_load() checks the loaded row/wellbore counts against exact
+# expected values - by design, since this is a fixed source snapshot, not
+# an incremental feed (see module docstring). The real snapshot's counts
+# are the default, so a normal run against data/raw/Volve production
+# data.xlsx is checked exactly as before; overriding both lets this same
+# script validate a different fixed snapshot instead - e.g. the tiny
+# synthetic workbook in tests/fixtures/, which CI loads to exercise this
+# whole pipeline without the licensed real data (see data/README.md).
+EXPECTED_DAILY_ROWS = int(os.environ.get("VOLVE_EXPECTED_DAILY_ROWS", "15634"))
+EXPECTED_WELLBORE_COUNT = int(os.environ.get("VOLVE_EXPECTED_WELLBORE_COUNT", "7"))
 
 # Excel column name -> raw column name, positionally paired. Daily sheet
 # columns loaded cleanly in the data-quality notebook (Sections 2-3), so
@@ -341,16 +359,16 @@ def validate_load(conn, daily_df: pd.DataFrame, monthly_df: pd.DataFrame, core_c
         cur.execute("SELECT count(*) FROM core.daily_production")
         core_daily_count = cur.fetchone()[0]
         checks.append((
-            "core daily row count = 15,634",
-            core_daily_count == 15634,
+            f"core daily row count = {EXPECTED_DAILY_ROWS:,}",
+            core_daily_count == EXPECTED_DAILY_ROWS,
             f"{core_daily_count}",
         ))
 
         cur.execute("SELECT count(*) FROM core.wellbore")
         core_wellbore_count = cur.fetchone()[0]
         checks.append((
-            "core wellbore count = 7",
-            core_wellbore_count == 7,
+            f"core wellbore count = {EXPECTED_WELLBORE_COUNT}",
+            core_wellbore_count == EXPECTED_WELLBORE_COUNT,
             f"{core_wellbore_count}",
         ))
 

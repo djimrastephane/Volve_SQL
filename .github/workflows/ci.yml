@@ -52,6 +52,74 @@ jobs:
             echo "::endgroup::"
           done
 
+  loader-fixture-test:
+    name: Load synthetic fixture through the real pipeline
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    # sql-schema-apply above only proves the DDL applies to an empty
+    # database - src/load_postgres.py, and the data-dependent contents of
+    # 04_quality_checks.sql/06_analysis.sql, were never actually exercised
+    # by CI, since the real Volve workbook is licensed and not
+    # redistributed (data/README.md). This job runs the real loader
+    # against tests/fixtures/generate_sample_workbook.py's tiny synthetic
+    # stand-in instead, so a loader or transform regression - a broken
+    # column mapping, a stray-row-exclusion bug, a reconciliation query
+    # that no longer runs - gets caught here, not on the next real load.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Apply schema/views/role (skip 04 - runs after data exists below)
+        env:
+          PGPASSWORD: postgres
+        run: |
+          for f in sql/01_create_schemas.sql sql/02_create_tables.sql \
+                   sql/03_create_indexes.sql sql/05_views.sql sql/07_app_role.sql; do
+            psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$f"
+          done
+      - name: Generate the synthetic fixture
+        run: python tests/fixtures/generate_sample_workbook.py /tmp/sample_workbook.xlsx
+      - name: Load the fixture through src/load_postgres.py
+        env:
+          PGHOST: localhost
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          VOLVE_DB_NAME: postgres
+          VOLVE_WORKBOOK_PATH: /tmp/sample_workbook.xlsx
+          # The fixture's own known row/wellbore counts - see
+          # tests/fixtures/generate_sample_workbook.py's docstring. The
+          # real snapshot's counts (15,634 / 7) remain the script's
+          # default when these are unset.
+          VOLVE_EXPECTED_DAILY_ROWS: "20"
+          VOLVE_EXPECTED_WELLBORE_COUNT: "2"
+        run: python src/load_postgres.py
+      # Proves these scripts execute cleanly against real (if synthetic)
+      # data - not that every check reports PASS. Most of 04's DQ-00X
+      # checks compare against the real dataset's exact known exception
+      # counts (e.g. "244 pre-2008 rows"), which this fixture was never
+      # meant to reproduce - see its docstring. ON_ERROR_STOP only fails
+      # this step on an actual SQL error, not on a query legitimately
+      # returning a FAIL/REVIEW row.
+      - name: Run quality checks and analysis queries against the loaded data
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f sql/04_quality_checks.sql
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f sql/06_analysis.sql
+
   python-syntax:
     name: Python syntax check
     runs-on: ubuntu-latest

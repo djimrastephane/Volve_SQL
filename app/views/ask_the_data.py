@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 import nlsql
+import queries as q
 
 st.title("Ask the Data")
 st.caption(
@@ -35,6 +36,11 @@ if st.button("Ask", type="primary") and question:
         except nlsql.NLSQLError as exc:
             error = str(exc)
             sql = exc.sql
+    st.session_state["ask_result"] = {"sql": sql, "df": df, "error": error}
+
+result = st.session_state.get("ask_result")
+if result:
+    sql, df, error = result["sql"], result["df"], result["error"]
 
     if error:
         st.error(error)
@@ -59,6 +65,16 @@ if st.button("Ask", type="primary") and question:
                     col_widget.metric(label, f"{value:,}")
                 else:
                     col_widget.metric(label, str(value))
+        elif "wellbore_name" in df.columns and set(df["wellbore_name"]) <= set(q.list_wells()["wellbore_name"]):
+            st.caption("Click a row to open that well on Well Performance.")
+            answer_event = st.dataframe(
+                df, width="stretch", hide_index=True,
+                on_select="rerun", selection_mode="single-row",
+            )
+            if answer_event.selection.rows:
+                selected_well = df.iloc[answer_event.selection.rows[0]]["wellbore_name"]
+                st.session_state["well_performance_select"] = selected_well
+                st.switch_page("views/well_performance.py")
         else:
             st.dataframe(df, width="stretch", hide_index=True)
 

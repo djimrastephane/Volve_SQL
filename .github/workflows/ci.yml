@@ -35,6 +35,15 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+      # sql/07_app_role.sql grants against a database literally named
+      # volve_analytics (matching VOLVE_DB_NAME's default everywhere else
+      # in this project - app/db.py, src/load_postgres.py), not whatever
+      # database happens to be current - so that database has to actually
+      # exist first, or that GRANT fails with "database does not exist".
+      - name: Create volve_analytics database
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE volve_analytics"
       # Applies every sql/NN_*.sql file in order against a fresh, empty
       # database - the raw Excel source data is licensed and not
       # redistributed (see data/README.md), so this validates that the
@@ -48,7 +57,7 @@ jobs:
                    sql/03_create_indexes.sql sql/04_quality_checks.sql \
                    sql/05_views.sql sql/06_analysis.sql sql/07_app_role.sql; do
             echo "::group::$f"
-            psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$f"
+            psql -h localhost -U postgres -d volve_analytics -v ON_ERROR_STOP=1 -f "$f"
             echo "::endgroup::"
           done
 
@@ -82,13 +91,21 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
+      # sql/07_app_role.sql grants against a database literally named
+      # volve_analytics (matching VOLVE_DB_NAME's default everywhere else
+      # in this project), not whatever database happens to be current -
+      # so that database has to actually exist first, or that GRANT fails.
+      - name: Create volve_analytics database
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE volve_analytics"
       - name: Apply schema/views/role (skip 04 - runs after data exists below)
         env:
           PGPASSWORD: postgres
         run: |
           for f in sql/01_create_schemas.sql sql/02_create_tables.sql \
                    sql/03_create_indexes.sql sql/05_views.sql sql/07_app_role.sql; do
-            psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$f"
+            psql -h localhost -U postgres -d volve_analytics -v ON_ERROR_STOP=1 -f "$f"
           done
       - name: Generate the synthetic fixture
         run: python tests/fixtures/generate_sample_workbook.py /tmp/sample_workbook.xlsx
@@ -97,7 +114,7 @@ jobs:
           PGHOST: localhost
           PGUSER: postgres
           PGPASSWORD: postgres
-          VOLVE_DB_NAME: postgres
+          VOLVE_DB_NAME: volve_analytics
           VOLVE_WORKBOOK_PATH: /tmp/sample_workbook.xlsx
           # The fixture's own known row/wellbore counts - see
           # tests/fixtures/generate_sample_workbook.py's docstring. The
@@ -117,8 +134,8 @@ jobs:
         env:
           PGPASSWORD: postgres
         run: |
-          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f sql/04_quality_checks.sql
-          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f sql/06_analysis.sql
+          psql -h localhost -U postgres -d volve_analytics -v ON_ERROR_STOP=1 -f sql/04_quality_checks.sql
+          psql -h localhost -U postgres -d volve_analytics -v ON_ERROR_STOP=1 -f sql/06_analysis.sql
 
   python-syntax:
     name: Python syntax check

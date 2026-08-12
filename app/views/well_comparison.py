@@ -20,6 +20,11 @@ selected_codes = wells.loc[
     wells["wellbore_name"].isin(selected_names), "npd_well_bore_code"
 ].astype(int).tolist()
 
+# Fixed per-well color, not reassigned by charting order - keeps a given
+# well the same color across every chart on this page, and stable if the
+# selection changes, instead of shifting when a well drops out of view.
+well_color_map = dict(zip(wells["wellbore_name"], c.WELL_PALETTE))
+
 st.subheader("Production history (superposed)")
 st.caption(
     "Actual monthly production on real calendar time, selected wells overlaid on one "
@@ -41,12 +46,17 @@ with col_scale:
 metric_col = {"Oil": "oil_volume", "Gas": "gas_volume", "Water": "water_volume"}[metric]
 history = q.monthly_production_multi(selected_codes)
 if not history.empty:
-    # Default categorical palette, not a stream-themed monochrome scale:
-    # with up to 7 overlapping lines, telling wells apart by hue matters
-    # more here than reinforcing "this is an oil chart" - shades of one
-    # color made wells hard to distinguish once more than 2-3 were selected.
-    fig0 = px.line(history, x="month_start", y=metric_col, color="wellbore_name")
-    fig0.update_layout(yaxis_title=f"{metric} (Sm³ / month)", xaxis_title=None)
+    # Fixed categorical palette, not a stream-themed monochrome scale: with
+    # up to 7 overlapping lines, telling wells apart by hue matters more
+    # here than reinforcing "this is an oil chart" - shades of one color
+    # made wells hard to distinguish once more than 2-3 were selected.
+    # Plotly's own default qualitative palette isn't enough on its own at
+    # 7 categories (two near-identical blues, two near-identical
+    # greens/teals) - WELL_PALETTE is a hand-picked set verified
+    # distinguishable across all 7 wells at once.
+    fig0 = px.line(history, x="month_start", y=metric_col, color="wellbore_name",
+                    color_discrete_map=well_color_map)
+    fig0.update_layout(yaxis_title=f"{metric} (Sm³ / month)", xaxis_title=None, legend_title_text="Well")
     if log_scale:
         fig0.update_yaxes(type="log")
     st.plotly_chart(fig0, width="stretch")
@@ -67,8 +77,17 @@ if not rank_selected.empty:
     st.plotly_chart(fig, width="stretch")
     st.dataframe(
         rank_selected[["wellbore_name", "total_oil", "oil_rank", "total_gas", "gas_rank",
-                        "total_water", "water_rank"]],
+                        "total_water", "water_rank"]].rename(columns={
+            "wellbore_name": "Well", "total_oil": "Cumulative oil (Sm³)", "oil_rank": "Oil rank",
+            "total_gas": "Cumulative gas (Sm³)", "gas_rank": "Gas rank",
+            "total_water": "Cumulative water (Sm³)", "water_rank": "Water rank",
+        }),
         width="stretch", hide_index=True,
+        column_config={
+            "Cumulative oil (Sm³)": st.column_config.NumberColumn(format="%,.0f"),
+            "Cumulative gas (Sm³)": st.column_config.NumberColumn(format="%,.0f"),
+            "Cumulative water (Sm³)": st.column_config.NumberColumn(format="%,.0f"),
+        },
     )
 else:
     st.caption("Select at least one well.")
@@ -76,15 +95,29 @@ else:
 st.subheader("Normalized production profiles")
 st.caption(
     "Oil production indexed to days since each well's first positive oil day, "
-    "as % of that well's own peak daily oil  -  generalizes A3/A4 for shape comparison"
+    "as % of that well's own peak daily oil  -  generalizes A3/A4 for shape comparison. "
+    "30-day rolling average, not the raw daily series: this chart's job is comparing "
+    "decline *shape* across wells, and raw daily values swing enough day-to-day (shut-in "
+    "days, choke changes, restart ramp-up) that up to 7 overlapping raw lines were "
+    "unreadable. The exact-date, no-smoothing values this deliberately trades away are "
+    "on Well Performance's per-well Production history chart."
 )
 profiles = q.normalized_profiles(selected_codes)
 if not profiles.empty:
-    # Default categorical palette - same reasoning as the superposed chart
-    # above, only more so: this is a dense multi-line overlay where a
-    # monochrome scale made wells nearly impossible to tell apart.
-    fig2 = px.line(profiles, x="days_since_first_oil", y="pct_of_peak", color="wellbore_name")
-    fig2.update_layout(yaxis_title="% of peak daily oil", xaxis_title="Days since first oil")
+    profiles = profiles.sort_values(["wellbore_name", "days_since_first_oil"]).copy()
+    profiles["pct_of_peak_smoothed"] = (
+        profiles.groupby("wellbore_name")["pct_of_peak"]
+        .transform(lambda s: s.rolling(30, min_periods=1).mean())
+    )
+    # Fixed well-identity palette (WELL_PALETTE, via well_color_map) - same
+    # reasoning as the superposed chart above, only more so: this is a
+    # dense multi-line overlay where color collisions were worst.
+    fig2 = px.line(profiles, x="days_since_first_oil", y="pct_of_peak_smoothed", color="wellbore_name",
+                    color_discrete_map=well_color_map)
+    fig2.update_layout(
+        yaxis_title="% of peak daily oil (30-day avg)", xaxis_title="Days since first oil",
+        legend_title_text="Well",
+    )
     st.plotly_chart(fig2, width="stretch")
 else:
     st.caption("No oil-producing history for the selected wells.")
@@ -101,8 +134,9 @@ if not water.empty:
     # readability problem, not the ratio values themselves (verified live:
     # they genuinely reach ~25-30 late in some wells' lives - real rising
     # water cut, not division-by-near-zero noise).
-    fig3 = px.line(water, x="month_start", y="water_oil_ratio", color="wellbore_name")
-    fig3.update_layout(yaxis_title="Water / oil ratio", xaxis_title=None)
+    fig3 = px.line(water, x="month_start", y="water_oil_ratio", color="wellbore_name",
+                    color_discrete_map=well_color_map)
+    fig3.update_layout(yaxis_title="Water / oil ratio", xaxis_title=None, legend_title_text="Well")
     st.plotly_chart(fig3, width="stretch")
 else:
     st.caption("No monthly data for the selected wells.")

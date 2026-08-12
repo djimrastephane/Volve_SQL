@@ -26,6 +26,24 @@ WATER_SCALE = "Blues"
 GAS_SCALE = "Reds"
 STREAM_SCALE_MAP = {"Oil": OIL_SCALE, "Gas": GAS_SCALE, "Water": WATER_SCALE}
 
+# Tableau10, for charts overlaying multiple wells' identity rather than a
+# single stream (Well Comparison's superposed/normalized/water-trend
+# charts) - Plotly's default qualitative palette puts two near-identical
+# blues and two near-identical greens/teals among this field's 7 wells at
+# once, defeating the point of a categorical palette. Fixed hue order
+# (not resampled per well count) so a given well keeps the same color
+# across every chart on the page, not just within one.
+WELL_PALETTE = [
+    "#4E79A7",  # blue
+    "#F28E2B",  # orange
+    "#E15759",  # red
+    "#76B7B2",  # teal
+    "#59A14F",  # green
+    "#EDC948",  # yellow
+    "#B07AA1",  # purple
+    "#FF9DA7",  # pink
+]
+
 
 def shades(scale_name: str, n: int) -> list[str]:
     """

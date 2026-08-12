@@ -33,6 +33,7 @@ completed = episodes.dropna(subset=["restart_date"])
 still_down = len(episodes) - len(completed)
 
 latest_wor_row = monthly_wor.dropna(subset=["water_oil_ratio"]).tail(1)
+has_oil_production = daily["bore_oil_vol"].notna().any()
 
 # Orientation, not exhaustive detail: what has this well produced, is it
 # currently operating, and where is it in its life - the diagnostic detail
@@ -113,8 +114,7 @@ st.plotly_chart(fig, width="stretch")
 has_injection = daily["bore_wi_vol"].astype("float64").gt(0).any()
 if has_injection:
     st.subheader("Water injection")
-    has_oil = daily["bore_oil_vol"].notna().any()
-    if has_oil:
+    if has_oil_production:
         st.caption(
             "Oil overlaid for reference on a separate axis - this well's peak "
             "water injection is ~25x its peak oil (unlike the field-wide "
@@ -135,7 +135,7 @@ if has_injection:
                    mode="lines", line=dict(color=c.WATER)),
         secondary_y=False,
     )
-    if has_oil:
+    if has_oil_production:
         fig2b.add_trace(
             go.Scatter(x=daily["production_date"], y=daily["bore_oil_vol"], name="Oil",
                        mode="lines", line=dict(color=c.OIL)),
@@ -217,12 +217,21 @@ if not episodes.empty:
     episodes = episodes.copy()
     episodes["shutdown_date"] = episodes["shutdown_date"].dt.date
     episodes["restart_date"] = episodes["restart_date"].dt.date
+    for oil_col in ["oil_before", "oil_after", "recovery_pct"]:
+        episodes[oil_col] = pd.to_numeric(episodes[oil_col], errors="coerce")
     table = episodes.rename(columns={
         "shutdown_date": "Shutdown", "restart_date": "Restart",
         "offline_days": "Offline days", "oil_before": "Oil before (Sm³/d)",
         "oil_after": "Oil after (Sm³/d)", "recovery_pct": "Recovery %",
     })
-    st.dataframe(table, width="stretch", hide_index=True)
+    st.dataframe(
+        table, width="stretch", hide_index=True,
+        column_config={
+            "Oil before (Sm³/d)": st.column_config.NumberColumn(format="%.2f"),
+            "Oil after (Sm³/d)": st.column_config.NumberColumn(format="%.2f"),
+            "Recovery %": st.column_config.NumberColumn(format="%.1f"),
+        },
+    )
     st.caption(
         "Oil before/after are exact-date checkpoints (the day before the "
         "shutdown, the day of the restart), not a smoothed trend - same "
@@ -230,36 +239,37 @@ if not episodes.empty:
         "read as several hundred, even several thousand, percent when oil "
         "immediately before a shutdown was already near zero - a small "
         "absolute change becomes a large ratio. Read it next to the raw "
-        "before/after values, not in isolation. A blank oil value means "
+        "before/after values, not in isolation. A \"None\" oil value means "
         "this well has no oil measurement for that day (e.g. it was "
-        "operating as a water injector at the time)."
+        "operating as a water injector at the time), not a reading of zero."
     )
 else:
     st.caption("No inactive periods recorded for this well.")
 
 st.subheader("Peak production")
-peak_row = daily.loc[daily["bore_oil_vol"].idxmax()] if daily["bore_oil_vol"].notna().any() else None
-if peak_row is not None:
+if has_oil_production:
+    peak_row = daily.loc[daily["bore_oil_vol"].idxmax()]
     st.write(
         f"Peak daily oil: **{peak_row['bore_oil_vol']:,.1f} Sm³** on "
         f"**{peak_row['production_date'].date()}**"
     )
-fig4 = go.Figure()
-fig4.add_trace(go.Scatter(
-    x=daily["production_date"], y=daily["bore_oil_vol"],
-    mode="lines", name="Daily oil", line=dict(color=c.OIL),
-))
-if peak_row is not None:
+    fig4 = go.Figure()
+    fig4.add_trace(go.Scatter(
+        x=daily["production_date"], y=daily["bore_oil_vol"],
+        mode="lines", name="Daily oil", line=dict(color=c.OIL),
+    ))
     fig4.add_trace(go.Scatter(
         x=[peak_row["production_date"]], y=[peak_row["bore_oil_vol"]],
         mode="markers", marker=dict(size=12, color="red"), name="Peak",
     ))
-fig4.update_layout(yaxis_title="Sm³ / day", xaxis_title=None)
-st.plotly_chart(fig4, width="stretch")
+    fig4.update_layout(yaxis_title="Sm³ / day", xaxis_title=None)
+    st.plotly_chart(fig4, width="stretch")
 
-st.subheader("Cumulative production")
-daily_sorted = daily.sort_values("production_date").copy()
-daily_sorted["cumulative_oil"] = daily_sorted["bore_oil_vol"].fillna(0).cumsum()
-fig5 = px.area(daily_sorted, x="production_date", y="cumulative_oil", color_discrete_sequence=[c.OIL])
-fig5.update_layout(yaxis_title="Cumulative Sm³", xaxis_title=None)
-st.plotly_chart(fig5, width="stretch")
+    st.subheader("Cumulative production")
+    daily_sorted = daily.sort_values("production_date").copy()
+    daily_sorted["cumulative_oil"] = daily_sorted["bore_oil_vol"].fillna(0).cumsum()
+    fig5 = px.area(daily_sorted, x="production_date", y="cumulative_oil", color_discrete_sequence=[c.OIL])
+    fig5.update_layout(yaxis_title="Cumulative Sm³", xaxis_title=None)
+    st.plotly_chart(fig5, width="stretch")
+else:
+    st.caption("This well never produces oil (a pure injector) - no peak or cumulative oil to show.")

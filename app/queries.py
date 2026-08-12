@@ -42,12 +42,31 @@ DQ_EXPLANATIONS = {
 
 
 def list_wells() -> pd.DataFrame:
-    """analytics.vw_well_lifetime_summary"""
-    return run_query(f"""
-        SELECT npd_well_bore_code, wellbore_name
-        FROM {VIEW_LIFETIME}
-        ORDER BY wellbore_name
+    """
+    analytics.vw_well_lifetime_summary + vw_daily_well_performance.
+    well_type is the *dominant* type across a well's recorded days, not a
+    fixed attribute - 15/9-F-5 has 144 OP days among 3,162 WI days (an
+    early transition period), so "dominant" is a majority vote, not a
+    guarantee every row agrees.
+    """
+    df = run_query(f"""
+        WITH type_counts AS (
+            SELECT npd_well_bore_code, well_type, count(*) AS n
+            FROM {VIEW_DAILY}
+            GROUP BY npd_well_bore_code, well_type
+        ),
+        dominant_type AS (
+            SELECT DISTINCT ON (npd_well_bore_code) npd_well_bore_code, well_type
+            FROM type_counts
+            ORDER BY npd_well_bore_code, n DESC
+        )
+        SELECT l.npd_well_bore_code, l.wellbore_name, dt.well_type
+        FROM {VIEW_LIFETIME} l
+        JOIN dominant_type dt ON dt.npd_well_bore_code = l.npd_well_bore_code
+        ORDER BY l.wellbore_name
     """)
+    df["well_type_label"] = df["well_type"].map({"OP": "Producer", "WI": "Injector"}).fillna(df["well_type"])
+    return df
 
 
 def field_kpis() -> pd.DataFrame:
@@ -287,7 +306,13 @@ def well_availability(well_code: int) -> float | None:
 
 
 def ranking() -> pd.DataFrame:
-    """analytics.vw_well_lifetime_summary - A1, A2, field-wide rank"""
+    """
+    analytics.vw_well_lifetime_summary - A1, A2, field-wide rank.
+    Also ranks water injection - oil/gas/produced-water rank are
+    meaningless for this field's 2 water injectors (always None/last), and
+    without an injection rank they had no comparable metric on this page
+    at all.
+    """
     return run_query(f"""
         SELECT
             wellbore_name,
@@ -296,7 +321,9 @@ def ranking() -> pd.DataFrame:
             total_gas,
             RANK() OVER (ORDER BY total_gas DESC NULLS LAST)         AS gas_rank,
             total_water,
-            DENSE_RANK() OVER (ORDER BY total_water DESC NULLS LAST) AS water_rank
+            DENSE_RANK() OVER (ORDER BY total_water DESC NULLS LAST) AS water_rank,
+            total_water_injection,
+            RANK() OVER (ORDER BY total_water_injection DESC NULLS LAST) AS injection_rank
         FROM {VIEW_LIFETIME}
         ORDER BY oil_rank
     """)

@@ -13,8 +13,25 @@ import queries as q
 st.title("Well Comparison")
 
 wells = q.list_wells()
+
+well_type_filter = st.radio(
+    "Well type", ["Producers", "Injectors", "All"], horizontal=True, key="well_type_filter",
+    help=(
+        "5 of this field's 7 wells are oil producers, 2 are water injectors "
+        "(dominant type by recorded days - 15/9-F-5 has a 144-day OP period "
+        "before settling as an injector). Almost every chart below is "
+        "oil-centric, so mixing injectors into an oil ranking or decline "
+        "curve isn't a fair comparison for either group - it just ranks "
+        "injectors last at everything. Producers is the default; switch to "
+        "Injectors to compare water injection instead."
+    ),
+)
+type_code = {"Producers": "OP", "Injectors": "WI"}.get(well_type_filter)
+filterable_wells = wells if type_code is None else wells[wells["well_type"] == type_code]
+
 selected_names = st.multiselect(
-    "Select wells", wells["wellbore_name"], default=list(wells["wellbore_name"])
+    "Select wells", filterable_wells["wellbore_name"], default=list(filterable_wells["wellbore_name"]),
+    key=f"compare_wells_{well_type_filter}",
 )
 selected_codes = wells.loc[
     wells["wellbore_name"].isin(selected_names), "npd_well_bore_code"
@@ -34,7 +51,7 @@ st.caption(
 col_metric, col_scale = st.columns([3, 1])
 with col_metric:
     metric = st.radio(
-        "Metric", ["Oil", "Gas", "Water"], horizontal=True, key="superposed_metric"
+        "Metric", ["Oil", "Gas", "Water", "Water injection"], horizontal=True, key="superposed_metric"
     )
 with col_scale:
     log_scale = st.checkbox(
@@ -43,7 +60,12 @@ with col_scale:
              "a real difference, not an axis artifact, but it can flatten "
              "smaller wells' trends on a linear axis. Toggle to compare shapes."
     )
-metric_col = {"Oil": "oil_volume", "Gas": "gas_volume", "Water": "water_volume"}[metric]
+metric_col = {
+    "Oil": "oil_volume", "Gas": "gas_volume", "Water": "water_volume",
+    "Water injection": "water_injection_volume",
+}[metric]
+if metric == "Water injection" and any(wells.loc[wells["wellbore_name"] == n, "well_type"].iloc[0] == "OP" for n in selected_names):
+    st.caption("Producers show ~0 here - water injection is what the 2 injector wells do, not the producers.")
 history = q.monthly_production_multi(selected_codes)
 if not history.empty:
     # Fixed categorical palette, not a stream-themed monochrome scale: with
@@ -64,29 +86,44 @@ else:
     st.caption("Select at least one well.")
 
 st.subheader("Production ranking")
-st.caption("Field-wide rank (all 7 wells), filtered to the selected wells  -  A1, A2")
+st.caption(
+    "Field-wide rank (all 7 wells), filtered to the selected wells  -  A1, A2. "
+    "Producers rank by cumulative oil; injectors rank by cumulative water "
+    "injection - oil rank is meaningless for a well that never produces "
+    "oil, and vice versa. Both ranks are always shown in the table below."
+)
 rank = q.ranking()
 rank_selected = rank[rank["wellbore_name"].isin(selected_names)]
 if not rank_selected.empty:
-    fig = px.bar(
-        rank_selected.sort_values("oil_rank"),
-        x="wellbore_name", y="total_oil", color="wellbore_name",
-        color_discrete_sequence=c.shades(c.OIL_SCALE, rank_selected["wellbore_name"].nunique()),
-    )
-    fig.update_layout(yaxis_title="Cumulative oil (Sm³)", xaxis_title=None, showlegend=False)
+    if well_type_filter == "Injectors":
+        fig = px.bar(
+            rank_selected.sort_values("injection_rank"),
+            x="wellbore_name", y="total_water_injection", color="wellbore_name",
+            color_discrete_sequence=c.shades(c.WATER_SCALE, rank_selected["wellbore_name"].nunique()),
+        )
+        fig.update_layout(yaxis_title="Cumulative water injection (Sm³)", xaxis_title=None, showlegend=False)
+    else:
+        fig = px.bar(
+            rank_selected.sort_values("oil_rank"),
+            x="wellbore_name", y="total_oil", color="wellbore_name",
+            color_discrete_sequence=c.shades(c.OIL_SCALE, rank_selected["wellbore_name"].nunique()),
+        )
+        fig.update_layout(yaxis_title="Cumulative oil (Sm³)", xaxis_title=None, showlegend=False)
     st.plotly_chart(fig, width="stretch")
     st.dataframe(
         rank_selected[["wellbore_name", "total_oil", "oil_rank", "total_gas", "gas_rank",
-                        "total_water", "water_rank"]].rename(columns={
+                        "total_water", "water_rank", "total_water_injection", "injection_rank"]].rename(columns={
             "wellbore_name": "Well", "total_oil": "Cumulative oil (Sm³)", "oil_rank": "Oil rank",
             "total_gas": "Cumulative gas (Sm³)", "gas_rank": "Gas rank",
             "total_water": "Cumulative water (Sm³)", "water_rank": "Water rank",
+            "total_water_injection": "Cumulative water injection (Sm³)", "injection_rank": "Injection rank",
         }),
         width="stretch", hide_index=True,
         column_config={
             "Cumulative oil (Sm³)": st.column_config.NumberColumn(format="%,.0f"),
             "Cumulative gas (Sm³)": st.column_config.NumberColumn(format="%,.0f"),
             "Cumulative water (Sm³)": st.column_config.NumberColumn(format="%,.0f"),
+            "Cumulative water injection (Sm³)": st.column_config.NumberColumn(format="%,.0f"),
         },
     )
 else:

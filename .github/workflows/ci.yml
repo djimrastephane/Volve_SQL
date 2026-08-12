@@ -136,6 +136,17 @@ jobs:
         run: |
           psql -h localhost -U postgres -d volve_analytics -v ON_ERROR_STOP=1 -f sql/04_quality_checks.sql
           psql -h localhost -U postgres -d volve_analytics -v ON_ERROR_STOP=1 -f sql/06_analysis.sql
+      # Reuses this same database - it's already loaded with the fixture
+      # and has the volve_app role from the schema step above, exactly
+      # what tests/conftest.py's fixtures need. See tests/conftest.py's
+      # module docstring: pytest doesn't orchestrate the load itself.
+      - name: Run pytest suite
+        env:
+          PGHOST: localhost
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          VOLVE_DB_NAME: volve_analytics
+        run: pytest tests/ -v
 
   python-syntax:
     name: Python syntax check

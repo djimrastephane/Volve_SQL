@@ -64,6 +64,12 @@ if result:
                 label = col_name.replace("_", " ").title()
                 if pd.isna(value):
                     col_widget.metric(label, "n/a")
+                elif isinstance(value, bool):
+                    # Must come before the int check: bool is a subtype of
+                    # int in Python, so a boolean would otherwise silently
+                    # format as "1"/"0" via the thousands-separator branch
+                    # below - a confusing answer to a yes/no question.
+                    col_widget.metric(label, "True" if value else "False")
                 elif isinstance(value, float):
                     col_widget.metric(label, f"{value:,.2f}")
                 elif isinstance(value, int):

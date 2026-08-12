@@ -168,6 +168,11 @@ if event.selection.rows:
     selected_well = summary_display.iloc[event.selection.rows[0]]["wellbore_name"]
     st.session_state["well_performance_select"] = selected_well
     st.switch_page("views/well_performance.py")
+if not never_produced.empty:
+    st.caption(
+        f"\"None\" cells above: {', '.join(never_produced)} never produces "
+        "oil, so it has no first oil date, peak, or cumulative oil to show."
+    )
 
 st.header("Field production trends")
 col_c, col_d = st.columns(2)

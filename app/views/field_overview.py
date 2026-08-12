@@ -25,26 +25,28 @@ st.caption(f"Source: `{q.VIEW_LIFETIME}`")
 field = q.field_monthly()
 
 st.subheader("Active wells")
-st.caption("Wells with at least one on-stream day that month  -  engineering question A10")
-fig = px.line(field, x="month_start", y="active_wells", markers=True)
-fig.update_layout(yaxis_title="Active wells", xaxis_title=None)
-st.plotly_chart(fig, width="stretch")
-
-st.subheader("Active wells by type")
 st.caption(
-    "Same as above, split into this field's 5 oil producers and 2 water "
-    "injectors - a well's type here is fixed (its dominant type across its "
-    "whole recorded history, same classification as Well Comparison's "
-    "Producers/Injectors tabs), not the day-level value, so it doesn't "
-    "switch category mid-chart."
+    "Wells with at least one on-stream day that month  -  engineering question A10, "
+    "split into this field's 5 oil producers and 2 water injectors, plus the total. "
+    "A well's type here is fixed (its dominant type across its whole recorded "
+    "history, same classification as Well Comparison's Producers/Injectors "
+    "tabs), not the day-level value, so it doesn't switch category mid-chart."
 )
 by_type = q.active_wells_by_type()
-fig_type = px.line(
-    by_type, x="month_start", y="active_wells", color="well_type", markers=True,
-    color_discrete_map={"Producer": c.OIL, "Injector": c.WATER},
-)
-fig_type.update_layout(yaxis_title="Active wells", xaxis_title=None, legend_title_text="Well type")
-st.plotly_chart(fig_type, width="stretch")
+totals = by_type.groupby("month_start")["active_wells"].sum().reset_index()
+fig = go.Figure()
+for well_type, color in [("Producer", c.OIL), ("Injector", c.WATER)]:
+    series = by_type[by_type["well_type"] == well_type]
+    fig.add_trace(go.Scatter(
+        x=series["month_start"], y=series["active_wells"], name=well_type,
+        mode="lines+markers", line=dict(color=color),
+    ))
+fig.add_trace(go.Scatter(
+    x=totals["month_start"], y=totals["active_wells"], name="Total",
+    mode="lines", line=dict(color="#9c9c9c", dash="dash"),
+))
+fig.update_layout(yaxis_title="Active wells", xaxis_title=None, legend_title_text=None)
+st.plotly_chart(fig, width="stretch")
 
 st.subheader("Production history")
 st.caption(

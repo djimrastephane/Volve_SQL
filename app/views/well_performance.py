@@ -94,24 +94,70 @@ if has_injection:
     fig2b.update_yaxes(title_text="Water injection (Sm³ / day)", secondary_y=False)
     st.plotly_chart(fig2b, width="stretch")
 
-st.subheader("On-stream hours and shutdown/restart events")
-st.caption("Shutdown/restart = a change in active state between two consecutive recorded days  -  A11")
+st.subheader("On-stream hours and inactive periods")
+st.caption(
+    "\"Shutdown\" / \"restart\" below are concise labels for an *observed* "
+    "state change, not a confirmed operational event (planned workover, "
+    "field-wide outage, or a genuine failure all look the same here) - "
+    "a shutdown is this well's first inactive day (ON_STREAM_HRS = 0) "
+    "after an observed active day, and a restart is its return to active "
+    "state. Reconstructed from daily records with PostgreSQL window "
+    "functions: LAG() flags each day the state differs from the day "
+    "before, a running SUM() of those flags groups consecutive same-state "
+    "days into one episode  -  extends A11's transition count into full "
+    "episodes (see sql/06_analysis.sql, \"A11 extended\")."
+)
 fig3 = px.bar(daily, x="production_date", y="on_stream_hrs")
 fig3.update_layout(yaxis_title="Hours / day", xaxis_title=None)
 st.plotly_chart(fig3, width="stretch")
 
-transitions = q.well_transitions(well_code)
-tc1, tc2 = st.columns(2)
-tc1.metric("Shutdowns", int((transitions["transition_type"] == "shutdown").sum()))
-tc2.metric("Restarts", int((transitions["transition_type"] == "restart").sum()))
-if not transitions.empty:
-    st.dataframe(
-        transitions.rename(columns={"production_date": "date", "transition_type": "event"}),
-        width="stretch",
-        hide_index=True,
+episodes = q.well_downtime_episodes(well_code)
+availability = q.well_availability(well_code)
+completed = episodes.dropna(subset=["restart_date"])
+still_down = len(episodes) - len(completed)
+
+st.markdown("**On-stream performance**")
+k1, k2, k3, k4, k5, k6 = st.columns(6)
+k1.metric("Availability", f"{availability:.1f}%" if availability is not None else "n/a")
+k2.metric("Shutdown events", len(episodes))
+k3.metric("Offline days", f"{completed['offline_days'].sum():,.0f}" if not completed.empty else "0")
+k4.metric("Longest outage", f"{completed['offline_days'].max():,.0f} d" if not completed.empty else "n/a")
+k5.metric("Median outage", f"{completed['offline_days'].median():,.0f} d" if not completed.empty else "n/a")
+k6.metric("Restarts", len(completed))
+st.caption(
+    "Availability = on-stream hours as a % of hours across days with a "
+    "known state (days with no on-stream-hours reading are excluded, not "
+    "counted as inactive)  -  " + f"`{q.VIEW_DAILY}`."
+    + (f" {still_down} shutdown episode had no restart before this well's "
+       "last recorded day - still inactive when the record ends (duration "
+       "unknown), excluded from offline-day totals above."
+       if still_down else "")
+)
+
+st.markdown("**Shutdown / restart history**")
+if not episodes.empty:
+    episodes = episodes.copy()
+    episodes["shutdown_date"] = episodes["shutdown_date"].dt.date
+    episodes["restart_date"] = episodes["restart_date"].dt.date
+    table = episodes.rename(columns={
+        "shutdown_date": "Shutdown", "restart_date": "Restart",
+        "offline_days": "Offline days", "oil_before": "Oil before (Sm³/d)",
+        "oil_after": "Oil after (Sm³/d)", "recovery_pct": "Recovery %",
+    })
+    st.dataframe(table, width="stretch", hide_index=True)
+    st.caption(
+        "Oil before/after are exact-date checkpoints (the day before the "
+        "shutdown, the day of the restart), not a smoothed trend - same "
+        "methodology as A5's peak-vs-checkpoint comparison. Recovery % can "
+        "read as several hundred, even several thousand, percent when oil "
+        "immediately before a shutdown was already near zero - a small "
+        "absolute change becomes a large ratio. Read it next to the raw "
+        "before/after values, not in isolation. A blank oil value means "
+        "this well has no oil measurement for that day (e.g. it was "
+        "operating as a water injector at the time)."
     )
 else:
-    st.caption("No shutdown/restart transitions recorded for this well.")
+    st.caption("No inactive periods recorded for this well.")
 
 st.subheader("Peak production")
 peak_row = daily.loc[daily["bore_oil_vol"].idxmax()] if daily["bore_oil_vol"].notna().any() else None

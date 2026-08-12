@@ -375,6 +375,11 @@ at 124 shutdown/restart events over its recorded life.
 signature (frequent well intervention/testing on an injector), not a data
 quality problem — worth distinguishing from the DQ register's genuine
 exceptions.
+*Extended:* `sql/06_analysis.sql` also reconstructs full downtime episodes
+from these transitions ("gaps and islands" — `LAG()` + a running `SUM()`
+groups consecutive same-state days into one episode), with offline duration
+and oil production immediately before/after each shutdown. Surfaced on the
+dashboard's Well Performance page.
 
 **A12 — Does a new well coming online affect field oil rate?**
 *SQL:* before/after average `bore_oil_vol` window around each wellbore's

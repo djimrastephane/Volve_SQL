@@ -30,6 +30,22 @@ fig = px.line(field, x="month_start", y="active_wells", markers=True)
 fig.update_layout(yaxis_title="Active wells", xaxis_title=None)
 st.plotly_chart(fig, width="stretch")
 
+st.subheader("Active wells by type")
+st.caption(
+    "Same as above, split into this field's 5 oil producers and 2 water "
+    "injectors - a well's type here is fixed (its dominant type across its "
+    "whole recorded history, same classification as Well Comparison's "
+    "Producers/Injectors tabs), not the day-level value, so it doesn't "
+    "switch category mid-chart."
+)
+by_type = q.active_wells_by_type()
+fig_type = px.line(
+    by_type, x="month_start", y="active_wells", color="well_type", markers=True,
+    color_discrete_map={"Producer": c.OIL, "Injector": c.WATER},
+)
+fig_type.update_layout(yaxis_title="Active wells", xaxis_title=None, legend_title_text="Well type")
+st.plotly_chart(fig_type, width="stretch")
+
 st.subheader("Production history")
 st.caption(
     "Oil and water share the left axis; gas is plotted on the right axis - "

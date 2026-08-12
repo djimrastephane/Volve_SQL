@@ -107,6 +107,57 @@ def top_field_months(limit: int = 10) -> pd.DataFrame:
     return df
 
 
+def active_wells_by_type() -> pd.DataFrame:
+    """
+    analytics.vw_daily_well_performance + list_wells() - A10 generalized by
+    well type. Type is each well's fixed dominant type (from list_wells()),
+    not its day-level well_type value, so a well doesn't switch categories
+    between chart points - 15/9-F-5's 144-day early OP period doesn't make
+    it a producer for one segment of this chart, it's an injector
+    throughout, same as everywhere else in this app.
+
+    Explicitly zero-fills months where a type has no active wells (e.g.
+    Feb-Mar 2008, before any injector first comes online) rather than
+    omitting the row - a naive groupby drops those months entirely, which
+    makes a line chart interpolate straight across a real dip to zero
+    instead of showing it.
+    """
+    bounds = run_query(f"""
+        SELECT
+            make_date(MIN(EXTRACT(YEAR FROM production_date)::int),
+                       MIN(EXTRACT(MONTH FROM production_date)::int), 1) AS first_month,
+            MAX(production_date) AS last_date
+        FROM {VIEW_DAILY}
+    """)
+    daily_active = run_query(f"""
+        SELECT DISTINCT
+            make_date(
+                EXTRACT(YEAR FROM production_date)::int,
+                EXTRACT(MONTH FROM production_date)::int, 1
+            ) AS month_start,
+            npd_well_bore_code
+        FROM {VIEW_DAILY}
+        WHERE on_stream_hrs > 0
+    """)
+    wells = list_wells()
+    merged = daily_active.merge(wells[["npd_well_bore_code", "well_type_label"]], on="npd_well_bore_code")
+    counts = (
+        merged.groupby(["month_start", "well_type_label"])
+        .size()
+        .reset_index(name="active_wells")
+        .rename(columns={"well_type_label": "well_type"})
+    )
+
+    full_months = pd.date_range(bounds["first_month"].iloc[0], bounds["last_date"].iloc[0], freq="MS")
+    grid = pd.MultiIndex.from_product(
+        [full_months, wells["well_type_label"].unique()], names=["month_start", "well_type"]
+    ).to_frame(index=False)
+    counts["month_start"] = pd.to_datetime(counts["month_start"])
+    result = grid.merge(counts, on=["month_start", "well_type"], how="left")
+    result["active_wells"] = result["active_wells"].fillna(0).astype(int)
+    return result
+
+
 def well_daily(well_code: int) -> pd.DataFrame:
     """analytics.vw_daily_well_performance"""
     df = run_query(f"""

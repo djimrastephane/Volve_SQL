@@ -92,12 +92,47 @@ def well_daily(well_code: int) -> pd.DataFrame:
     """analytics.vw_daily_well_performance"""
     df = run_query(f"""
         SELECT production_date, bore_oil_vol, bore_gas_vol, bore_wat_vol,
-               bore_wi_vol, on_stream_hrs, is_active
+               bore_wi_vol, on_stream_hrs, is_active,
+               avg_downhole_pressure, avg_choke_size_p
         FROM {VIEW_DAILY}
         WHERE npd_well_bore_code = %s
         ORDER BY production_date
     """, (well_code,))
     df["production_date"] = pd.to_datetime(df["production_date"])
+    return df
+
+
+def well_snapshot(well_code: int) -> pd.DataFrame:
+    """
+    analytics.vw_daily_well_performance - single-row "as of last record"
+    snapshot: exact-date, no smoothing, same methodology as A5/the episode
+    checkpoints. latest_oil_rate is the well's most recently recorded day,
+    which is 0 for a well that ended shut-in (not a decline to zero) -
+    always paired with latest_record_date and latest_is_active so that
+    distinction is visible, not implied.
+    """
+    df = run_query(f"""
+        WITH latest AS (
+            SELECT production_date, bore_oil_vol, is_active
+            FROM {VIEW_DAILY}
+            WHERE npd_well_bore_code = %s AND on_stream_hrs IS NOT NULL
+            ORDER BY production_date DESC
+            LIMIT 1
+        ),
+        first_oil AS (
+            SELECT MIN(production_date) AS first_oil_date
+            FROM {VIEW_DAILY}
+            WHERE npd_well_bore_code = %s AND bore_oil_vol > 0
+        )
+        SELECT
+            latest.production_date AS latest_record_date,
+            latest.bore_oil_vol AS latest_oil_rate,
+            latest.is_active AS latest_is_active,
+            first_oil.first_oil_date
+        FROM latest, first_oil
+    """, (well_code, well_code))
+    df["latest_record_date"] = pd.to_datetime(df["latest_record_date"])
+    df["first_oil_date"] = pd.to_datetime(df["first_oil_date"])
     return df
 
 

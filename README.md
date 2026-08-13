@@ -142,8 +142,10 @@ same story, color-coded by stage: **grey** = the untouched source file,
 
 ```mermaid
 flowchart TD
-    A["Equinor Volve Excel workbook<br/>data/raw/Volve production data.xlsx<br/>(read-only)"]
-    B["<b>Python ETL</b><br/>src/load_postgres.py<br/>extract + light typing only"]
+    A["`**Equinor Volve Excel workbook**
+data/raw/Volve production data.xlsx (read-only)`"]
+    B["`**Python ETL** — src/load_postgres.py
+extract + light typing only`"]
     A --> B
 
     subgraph RAW["raw schema — untouched source"]
@@ -153,7 +155,8 @@ flowchart TD
     B --> C1
     B --> C2
 
-    D["<b>SQL transform</b><br/>sql/02_create_tables.sql target,<br/>populated by load_postgres.py's transform_core step"]
+    D["`**SQL transform** — sql/02_create_tables.sql target
+populated by load_postgres.py's transform_core step`"]
     C1 --> D
     C2 --> D
 
@@ -166,18 +169,23 @@ flowchart TD
     D --> E2
     D --> E3
 
-    F["<b>analytics.vw_* views</b><br/>sql/05_views.sql<br/>joins/aggregations an analyst would otherwise repeat"]
+    F["`**analytics.vw_* views** — sql/05_views.sql
+joins/aggregations an analyst would otherwise repeat`"]
     E1 --> F
     E2 --> F
     E3 --> F
 
-    G["sql/06_analysis.sql<br/><b>12 engineering questions, A1-A12</b><br/>full DB access"]
-    H["app/<br/>sql/07_app_role.sql: volve_app role,<br/><b>SELECT on analytics only</b> - no core/raw"]
+    G["`sql/06_analysis.sql
+**12 engineering questions, A1-A12** — full DB access`"]
+    H["`app/ — sql/07_app_role.sql: volve_app role
+**SELECT on analytics only** - no core/raw`"]
     F --> G
     F --> H
 
-    I["<b>Dashboard</b><br/>4 pages - queries.py mirrors 06_analysis.sql's<br/>logic independently (app has no access to core)"]
-    J["<b>Ask the Data</b><br/>local LLM via Ollama -> SQL -> analytics<br/>generated SQL always shown"]
+    I["`**Dashboard** — 4 pages
+queries.py mirrors 06_analysis.sql's logic independently (app has no access to core)`"]
+    J["`**Ask the Data**
+local LLM via Ollama -> SQL -> analytics — generated SQL always shown`"]
     H --> I
     H --> J
 

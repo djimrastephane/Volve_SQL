@@ -464,7 +464,10 @@ Shortcut: `make setup && make load && make check && make app` runs the same
 sequence below via four Makefile targets (`make help` lists all of them,
 including `make load-fixture` - loads a tiny synthetic stand-in instead of
 the real workbook, so `make check`/`make app` have something to show
-without the licensed data). The manual sequence:
+without the licensed data). No local PostgreSQL install? `make docker-up`
+runs PostgreSQL 17 in Docker instead (`docker-compose.yml`) - export
+`PGHOST=localhost PGUSER=postgres` first, then every target above works
+unchanged. The manual sequence:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -501,6 +504,7 @@ Volve_SQL/
 ├── LICENSE                      MIT license - covers this project's code only
 ├── NOTICE                       Volve data attribution and license notice
 ├── Makefile                     make setup/load/load-fixture/check/app
+├── docker-compose.yml           PostgreSQL 17, if you don't have it installed locally
 ├── requirements.txt
 ├── .github/workflows/
 │   └── ci.yml                   lint + schema dry-run + fixture load + pytest, on every push

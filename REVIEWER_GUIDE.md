@@ -47,8 +47,17 @@ the fast path into it, not a replacement for it.
 
 ## How to run (no license, no LLM — under 5 minutes)
 
+No local PostgreSQL install? One extra step first:
+
 ```bash
-make setup         # venv + deps + schema (needs local PostgreSQL)
+make docker-up                        # PostgreSQL 17 in Docker (docker-compose.yml)
+export PGHOST=localhost PGUSER=postgres
+```
+
+Then, either way:
+
+```bash
+make setup         # venv + deps + schema
 make load-fixture   # loads a tiny synthetic 2-well workbook, not the real data
 make check          # sqlfluff + pytest (76 tests)
 make app            # http://localhost:8501

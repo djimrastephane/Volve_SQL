@@ -19,9 +19,12 @@
 # Assumes local PostgreSQL with peer/trust auth for the current OS user -
 # this project's actual dev environment (see sql/07_app_role.sql's own
 # comment) - so, like every psql command in the README, none of these
-# recipes pass -U.
+# recipes pass -U. No local PostgreSQL install? `make docker-up` runs one
+# in Docker instead (see docker-compose.yml) - export PGHOST=localhost
+# PGUSER=postgres first (that file's own comment explains why both are
+# needed), then every target below works unchanged.
 
-.PHONY: help setup load check app load-fixture clean-fixture-db
+.PHONY: help setup load check app load-fixture clean-fixture-db docker-up docker-down
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python3
@@ -41,6 +44,11 @@ help:
 	@echo "                      'make check'/'make app' run without it)"
 	@echo "make clean-fixture-db - drop the fixture's known content so"
 	@echo "                        load-fixture can start clean"
+	@echo ""
+	@echo "make docker-up   - run PostgreSQL 17 in Docker instead of installing it"
+	@echo "                   (see docker-compose.yml for the export PGHOST=... /"
+	@echo "                   PGUSER=... this needs before the targets above)"
+	@echo "make docker-down - stop it (data persists in a named volume)"
 	@echo ""
 	@echo "Override the database name with DB_NAME=whatever"
 
@@ -100,3 +108,33 @@ check: $(VENV)/bin/pip
 
 app: $(VENV)/bin/pip
 	VOLVE_DB_NAME=$(DB_NAME) $(VENV)/bin/streamlit run app/app.py
+
+# Checks for a listener on the target port first, rather than letting
+# `docker compose up` "succeed" straight into a real, confirmed failure
+# mode on macOS: a native PostgreSQL bound to localhost:5432 and Docker's
+# proxy bound to *:5432 can BOTH stay up with no error - lsof shows both
+# listening - but a client connecting to localhost:5432 silently reaches
+# the native install, not the container, however "healthy" it reports.
+# Verified this exact collision by hand before adding the check: without
+# it, `make docker-up` here reports success and `psql` connects, but to
+# the wrong PostgreSQL, with a confusing "role postgres does not exist"
+# error - not "port in use".
+docker-up:
+	@port="$${VOLVE_PG_PORT:-5432}"; \
+	if command -v lsof > /dev/null && lsof -iTCP:$$port -sTCP:LISTEN > /dev/null 2>&1; then \
+		echo "Port $$port is already in use (likely a local PostgreSQL install)."; \
+		echo "Docker may still report success, but connections could silently"; \
+		echo "reach that other process instead of this container - see"; \
+		echo "docker-compose.yml. Use a different port:"; \
+		echo "  VOLVE_PG_PORT=5433 make docker-up"; \
+		exit 1; \
+	fi
+	docker compose up -d
+	@echo ""
+	@echo "PostgreSQL 17 running in Docker. Before make setup/load/check/app:"
+	@echo "  export PGHOST=localhost PGUSER=postgres"
+	@echo "  (add PGPORT=5433 too if you started this with VOLVE_PG_PORT=5433 -"
+	@echo "  see docker-compose.yml if port 5432 is already taken locally)"
+
+docker-down:
+	docker compose down

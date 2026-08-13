@@ -1,0 +1,65 @@
+# docker-compose.yml
+#
+# PostgreSQL 17 for local development - an alternative to installing
+# PostgreSQL natively, for anyone who doesn't already have it (a reviewer,
+# most obviously). Everything else in this project (Makefile, app/db.py,
+# src/load_postgres.py) already just connects via standard libpq
+# environment variables, so nothing else changes once this is running -
+# see "Using this" below.
+#
+# POSTGRES_HOST_AUTH_METHOD=trust matches this project's actual local-dev
+# assumption, not a shortcut invented for this file: sql/07_app_role.sql
+# creates the dashboard's volve_app role with no password on purpose,
+# because local Homebrew PostgreSQL uses trust auth for local connections
+# (see that file's own comment) - this setting makes the containerized
+# Postgres behave the same way, so volve_app (and every other role) stays
+# connectable exactly as the rest of the project already assumes. Not
+# meant for any real network exposure - see 07_app_role.sql's comment on
+# what a real deployment should do instead.
+#
+# Using this:
+#   make docker-up                # not `docker compose up -d` directly -
+#                                  # see that Makefile target for why
+#   export PGHOST=localhost       # libpq defaults to a local Unix socket
+#                                  # otherwise, which a container can't provide
+#   export PGUSER=postgres        # the official image only creates a
+#                                  # "postgres" superuser role - Homebrew's
+#                                  # local install instead creates one
+#                                  # matching your OS username, which is
+#                                  # what every psql/createdb call in this
+#                                  # project's Makefile relies on by default
+#   make setup && make load-fixture && make check && make app
+#
+# If port 5432 is already taken - most likely by a native PostgreSQL
+# install - `make docker-up` detects it up front and refuses to start
+# (see that Makefile target: on macOS this is a confirmed, silent-failure
+# risk, not a theoretical one - a native Postgres bound to localhost:5432
+# and Docker's proxy bound to *:5432 can BOTH report success, but a
+# client connecting to localhost:5432 silently reaches the native one).
+# Use a different port instead:
+#   VOLVE_PG_PORT=5433 make docker-up
+#   export PGHOST=localhost PGPORT=5433 PGUSER=postgres
+#
+# Verified end-to-end (all four make targets, all 76 pytest tests, and the
+# dashboard actually connecting as volve_app) against this exact config
+# before committing it, not just written and assumed to work.
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: volve_sql_postgres
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_DB: volve_analytics
+    ports:
+      - "${VOLVE_PG_PORT:-5432}:5432"
+    volumes:
+      - volve_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  volve_pgdata:

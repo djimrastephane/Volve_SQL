@@ -455,6 +455,12 @@ changed concrete schema decisions:
 
 ## 12. Reproducibility
 
+Shortcut: `make setup && make load && make check && make app` runs the same
+sequence below via four Makefile targets (`make help` lists all of them,
+including `make load-fixture` - loads a tiny synthetic stand-in instead of
+the real workbook, so `make check`/`make app` have something to show
+without the licensed data). The manual sequence:
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt

@@ -5,8 +5,10 @@ openpyxl==3.1.5
 # PostgreSQL loading (src/load_postgres.py)
 psycopg2-binary==2.9.12
 
-# Test suite (tests/)
+# Test suite (tests/) and SQL lint (make check, .sqlfluff) - version pinned
+# to match .github/workflows/ci.yml exactly
 pytest==8.4.2
+sqlfluff==4.3.0
 
 # Notebook execution
 ipykernel==7.3.0

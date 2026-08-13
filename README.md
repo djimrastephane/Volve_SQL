@@ -169,7 +169,7 @@ populated by load_postgres.py's transform_core step`"]
     D --> E2
     D --> E3
 
-    F["`**analytics.vw_* views** — sql/05_views.sql
+    F["`**analytics views (vw_ prefix)** — sql/05_views.sql
 joins/aggregations an analyst would otherwise repeat`"]
     E1 --> F
     E2 --> F

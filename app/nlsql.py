@@ -11,8 +11,12 @@ PostgreSQL, never an LLM paraphrase of it - and the generated SQL is always
 shown to the user ("View SQL"), so nothing here is a black box.
 
 Defense in depth before any generated SQL is executed:
-  1. Must parse as a single SELECT/WITH statement (no multi-statement, no
-     DDL/DML keywords, no reference to core/raw/pg_catalog/information_schema).
+  1. Must parse (as PostgreSQL) into exactly one statement whose root is a
+     SELECT, contain no write/DDL node anywhere in the tree - not just at
+     the root, since PostgreSQL allows a data-modifying CTE
+     (`WITH x AS (DELETE FROM ... RETURNING *) SELECT * FROM x`) whose
+     outer shape is a SELECT - and reference only the exact 5 analytics
+     views in ALLOWED_VIEWS, nothing else. See _validate_sql().
   2. Executed on a connection as volve_app (sql/07_app_role.sql), which has
      no grant on core or raw regardless of what the SQL says.
   3. That connection is opened read-only and capped with a 10s
@@ -26,6 +30,9 @@ import os
 import re
 
 import requests
+import sqlglot
+import sqlglot.errors
+from sqlglot import exp
 
 from db import run_query
 
@@ -162,13 +169,29 @@ Rules:
   first by default and that silently misranks NULL rows as "highest".
 """
 
-_FORBIDDEN = re.compile(
-    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|COPY|CALL|"
-    r"EXECUTE|VACUUM|MERGE)\b",
-    re.IGNORECASE,
-)
-_NON_ANALYTICS_SCHEMA = re.compile(
-    r"\b(core|raw|pg_catalog|information_schema|pg_[a-z_]+)\s*\.", re.IGNORECASE
+# Exact allowlist, not a "reject known-bad schemas" blocklist - anything
+# not literally one of these 5 views is refused, including views/tables
+# added to any other schema in the future. Kept in sync with SCHEMA_CARD
+# by hand (5 entries, low churn) rather than derived from it, since
+# SCHEMA_CARD is prose meant for the LLM, not a machine-readable source.
+ALLOWED_VIEWS = {
+    "analytics.vw_daily_well_performance",
+    "analytics.vw_monthly_well_performance",
+    "analytics.vw_well_lifetime_summary",
+    "analytics.vw_field_monthly_summary",
+    "analytics.vw_data_quality_review",
+}
+
+# Anything in this tuple, found ANYWHERE in the parsed tree (not just at
+# the root), gets the statement refused - covers the data-modifying-CTE
+# case above, and exp.Command is sqlglot's fallback node for statement
+# types it doesn't have a dedicated parser for (VACUUM, CALL, ...) - "not
+# a construct this validator understands" refuses closed, the same as
+# "not a SELECT" does, rather than assuming an unrecognized statement is
+# probably harmless.
+_WRITE_OR_UNKNOWN_NODES = (
+    exp.DML, exp.DDL, exp.Drop, exp.Alter, exp.TruncateTable,
+    exp.Grant, exp.Command, exp.Execute, exp.Cache, exp.Set,
 )
 
 
@@ -195,26 +218,66 @@ def _clean_sql(raw: str) -> str:
     text = raw.strip()
     text = re.sub(r"^```(sql)?", "", text, flags=re.IGNORECASE).strip()
     text = re.sub(r"```$", "", text).strip()
-    # Keep only the first statement, in case the model added more than one.
-    text = text.split(";")[0].strip()
+    # Strips only a single well-formed trailing semicolon (the model
+    # ending its one statement normally) - deliberately does NOT truncate
+    # at the first ";" the way this used to, since that would silently
+    # discard a second statement instead of letting _validate_sql's
+    # statement-count check catch and report it.
+    text = text.rstrip(";").strip()
     return text
+
+
+def _table_refs(tree: exp.Expression) -> set[str]:
+    """Every schema-qualified table/view this statement actually reads
+    from, excluding references that resolve to a CTE defined in the same
+    statement rather than a real external object. Shared by
+    _validate_sql() (checked against ALLOWED_VIEWS) and source_views()
+    (just displayed to the user) so both agree on what "referenced" means."""
+    cte_names = {cte.alias for cte in tree.find_all(exp.CTE)}
+    refs = set()
+    for table in tree.find_all(exp.Table):
+        if not table.db and table.name in cte_names:
+            continue
+        qualified = f"{table.db}.{table.name}" if table.db else table.name
+        if qualified:
+            refs.add(qualified)
+    return refs
 
 
 def _validate_sql(sql: str) -> None:
     if not sql:
         raise NLSQLError("The model returned an empty query.")
-    if not re.match(r"^(SELECT|WITH)\b", sql, re.IGNORECASE):
+
+    try:
+        statements = [s for s in sqlglot.parse(sql, read="postgres") if s is not None]
+    except sqlglot.errors.SqlglotError as exc:
+        raise NLSQLError(f"Generated statement does not parse as valid SQL: {exc}") from exc
+
+    if len(statements) == 0:
+        raise NLSQLError("The model returned an empty query.")
+    if len(statements) > 1:
+        raise NLSQLError(
+            f"Expected exactly one SQL statement, the model produced {len(statements)} - refused to run it."
+        )
+    tree = statements[0]
+
+    if not isinstance(tree, exp.Select):
         raise NLSQLError(
             "Generated statement is not a SELECT/WITH query - refused to run it."
         )
-    if _FORBIDDEN.search(sql):
+
+    if list(tree.find_all(_WRITE_OR_UNKNOWN_NODES)):
         raise NLSQLError(
-            "Generated statement contains a write/DDL keyword - refused to run it."
+            "Generated statement contains a write/DDL operation (possibly nested "
+            "inside a CTE) - refused to run it."
         )
-    if _NON_ANALYTICS_SCHEMA.search(sql):
-        raise NLSQLError(
-            "Generated statement references a schema outside analytics - refused to run it."
-        )
+
+    for qualified in _table_refs(tree):
+        if qualified not in ALLOWED_VIEWS:
+            raise NLSQLError(
+                f'Generated statement references "{qualified}", which is not one of the '
+                f"allowed analytics views - refused to run it."
+            )
 
 
 def generate_sql(question: str, model: str = OLLAMA_MODEL, timeout: int = 90) -> str:
@@ -250,7 +313,13 @@ def generate_sql(question: str, model: str = OLLAMA_MODEL, timeout: int = 90) ->
 
 
 def source_views(sql: str) -> list[str]:
-    return sorted(set(re.findall(r"analytics\.\w+", sql, re.IGNORECASE)))
+    try:
+        statements = [s for s in sqlglot.parse(sql, read="postgres") if s is not None]
+    except sqlglot.errors.SqlglotError:
+        return []
+    if len(statements) != 1:
+        return []
+    return sorted(_table_refs(statements[0]))
 
 
 def ask(question: str):

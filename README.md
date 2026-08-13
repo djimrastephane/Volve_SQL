@@ -3,8 +3,6 @@
 [![CI](https://github.com/djimrastephane/Volve_SQL/actions/workflows/ci.yml/badge.svg)](https://github.com/djimrastephane/Volve_SQL/actions/workflows/ci.yml)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-336791?logo=postgresql&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
-![pandas](https://img.shields.io/badge/pandas-3.0.5-150458?logo=pandas&logoColor=white)
-![Streamlit](https://img.shields.io/badge/Streamlit-1.61-FF4B4B?logo=streamlit&logoColor=white)
 ![Data Quality](https://img.shields.io/badge/data%20quality%20checks-21%20PASS%20%2F%206%20REVIEW%20%2F%200%20FAIL-yellow)
 [![Dataset](https://img.shields.io/badge/dataset-Equinor%20Volve-005c99)](#data-license-and-attribution)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)

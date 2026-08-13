@@ -1,5 +1,6 @@
 # Volve SQL
 
+[![CI](https://github.com/djimrastephane/Volve_SQL/actions/workflows/ci.yml/badge.svg)](https://github.com/djimrastephane/Volve_SQL/actions/workflows/ci.yml)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-336791?logo=postgresql&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
 ![pandas](https://img.shields.io/badge/pandas-3.0.5-150458?logo=pandas&logoColor=white)

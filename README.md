@@ -18,6 +18,11 @@ affiliated with, sponsored by, or endorsed by Equinor or the former Volve
 license partners — see [Data license and attribution](#data-license-and-attribution)
 and [`NOTICE`](NOTICE).
 
+**Reviewing this project?** [`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md) is a
+one-page fast path — what it demonstrates, how to run it in under 5 minutes
+with no licensed data or local LLM required, and which files are worth your
+time.
+
 ## Screenshots
 
 The Streamlit dashboard (`app/`) — connected only to `analytics.*`, see
@@ -492,9 +497,13 @@ checks, `21` PASS, `6` REVIEW, `0` FAIL, `PASS WITH REVIEW` overall.
 ```
 Volve_SQL/
 ├── README.md
+├── REVIEWER_GUIDE.md            one-page fast path for reviewers
 ├── LICENSE                      MIT license - covers this project's code only
 ├── NOTICE                       Volve data attribution and license notice
+├── Makefile                     make setup/load/load-fixture/check/app
 ├── requirements.txt
+├── .github/workflows/
+│   └── ci.yml                   lint + schema dry-run + fixture load + pytest, on every push
 ├── data/
 │   ├── README.md                how to obtain the source workbook
 │   ├── raw/                     Volve production data.xlsx (gitignored - not committed)
@@ -513,6 +522,12 @@ Volve_SQL/
 │   ├── 05_views.sql
 │   ├── 06_analysis.sql
 │   └── 07_app_role.sql
+├── tests/                       pytest suite (76 tests) - see tests/conftest.py
+│   ├── conftest.py
+│   ├── fixtures/generate_sample_workbook.py   tiny synthetic 2-well workbook
+│   ├── test_load_postgres.py
+│   ├── test_nlsql.py
+│   └── test_queries.py
 ├── docs/
 │   └── screenshots/               dashboard screenshots used in this README
 └── app/                          Streamlit dashboard + Ask the Data - see app/README.md

@@ -222,7 +222,8 @@ the verified output of the one before it:
                                              npd_well_bore_code (PK, FK)
                                              reference_year     (PK)
                                              reference_month    (PK)
-                                             on_stream, oil, gas, water, gi, wi  (TEXT - see Section 11)
+                                             on_stream_hrs, oil_vol, gas_vol, water_vol,
+                                             gas_injection_vol, water_injection_vol  (NUMERIC)
 
  analytics.* are VIEWS, not tables - derived from core, not persisted:
    vw_daily_well_performance     - core.daily_production JOIN core.wellbore
@@ -551,8 +552,15 @@ Volve_SQL/
 
 ## 14. Technologies
 
-PostgreSQL 17 · Python 3.11 · pandas · openpyxl · psycopg2 · Jupyter
-(nbformat/nbclient) · Streamlit · Plotly · plain SQL (no ORM)
+- **Data pipeline:** PostgreSQL 17 · Python 3.11 · pandas · openpyxl ·
+  psycopg2 · Jupyter (nbformat/nbclient) · plain SQL (no ORM)
+- **Dashboard:** Streamlit · Plotly
+- **Ask the Data:** local LLM via Ollama · `sqlglot` (SQL parsing/validation
+  - `app/nlsql.py`)
+- **Testing & lint:** `pytest` (`tests/`) · `sqlfluff` (`sql/`, `.sqlfluff`)
+- **Reproducibility:** `Makefile` (`make setup/load/check/app`) · Docker
+  Compose (`docker-compose.yml`, PostgreSQL with no local install) · GitHub
+  Actions CI (`.github/workflows/ci.yml`)
 
 ## 15. Limitations
 
@@ -578,10 +586,16 @@ PostgreSQL 17 · Python 3.11 · pandas · openpyxl · psycopg2 · Jupyter
 - Extend `analytics` with true KPI views (water cut, GOR, decline curves)
   once those calculations are used by more than one downstream consumer,
   per the "no KPI factory" rule in `sql/05_views.sql`.
-- Improve "Ask the Data" on the two failure modes `app/bench_results.md`
-  found in every model tested: distinguishing a wellbore's first *recorded*
-  row from its first *producing* row, and generating a correct
-  `LAG`/`CASE` shutdown-restart query reliably.
+- Improve "Ask the Data" on the two *semantic* failure modes
+  `app/bench_results.md` found in every model tested: distinguishing a
+  wellbore's first *recorded* row from its first *producing* row, and
+  generating a correct `LAG`/`CASE` shutdown-restart query reliably. Both
+  are about whether the LLM interprets the question correctly, not whether
+  the SQL it produces is safe to run - `app/nlsql.py`'s validator (parses
+  with `sqlglot`: exact view allowlist, rejects any write/DDL node anywhere
+  in the tree, not just at the root) already addresses the safety side and
+  is unrelated to these two; a wrong-but-safe query still validates and
+  runs, it just answers the wrong question.
 - Distinguish production loss from operational downtime on the "Production
   change from peak" chart (Well Comparison): if a checkpoint's `on_stream_hrs`
   is also well below the well's peak-day hours, surface that alongside the

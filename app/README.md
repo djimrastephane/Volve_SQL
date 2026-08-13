@@ -32,7 +32,7 @@ Open http://localhost:8501.
 | Page | Views used | Engineering questions it answers |
 |---|---|---|
 | Field Overview | `vw_field_monthly_summary`, `vw_well_lifetime_summary` | A6, A7, A8, A10 |
-| Well Performance | `vw_daily_well_performance`, `vw_well_lifetime_summary` | A4, A11 |
+| Well Performance | `vw_daily_well_performance`, `vw_well_lifetime_summary`, `vw_downtime_episodes` | A4, A11 |
 | Well Comparison | `vw_well_lifetime_summary`, `vw_daily_well_performance`, `vw_monthly_well_performance` | A1, A2, A3, A5, A6 (generalized) |
 | Data Quality | `vw_data_quality_review` | DQ-001, DQ-003, DQ-004, DQ-005, DQ-006 |
 

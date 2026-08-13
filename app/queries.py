@@ -22,6 +22,7 @@ VIEW_DAILY = "analytics.vw_daily_well_performance"
 VIEW_MONTHLY = "analytics.vw_monthly_well_performance"
 VIEW_LIFETIME = "analytics.vw_well_lifetime_summary"
 VIEW_FIELD_MONTHLY = "analytics.vw_field_monthly_summary"
+VIEW_DOWNTIME = "analytics.vw_downtime_episodes"
 VIEW_DQ = "analytics.vw_data_quality_review"
 
 DQ_EXPLANATIONS = {
@@ -349,77 +350,21 @@ def well_transitions(well_code: int) -> pd.DataFrame:
 
 def well_downtime_episodes(well_code: int) -> pd.DataFrame:
     """
-    analytics.vw_daily_well_performance - extends A11 (see sql/06_analysis.sql,
-    "A11 extended") from counting transitions to reconstructing full downtime
-    episodes: "gaps and islands" groups consecutive same-state days via LAG()
-    + a running SUM() as a group id, GROUP BY collapses each run into one
-    episode. Only inactive episodes with an observed preceding active day
-    count as a shutdown (excludes the case where the well's first recorded
-    day is already inactive) - this is what makes shutdown counts match
-    well_transitions() exactly, verified against all 7 wells.
-
-    restart_date is NaT for a well still inactive at the end of its recorded
-    history (censored, not a zero-length outage). recovery_pct can swing to
-    triple digits when oil_before is near zero - a real feature of the data,
-    not an error; the app shows oil_before/oil_after alongside it rather
-    than the percentage alone.
+    analytics.vw_downtime_episodes, filtered to one well - extends A11 (see
+    sql/06_analysis.sql, "A11 extended") from counting transitions to full
+    downtime episodes. The "gaps and islands" reconstruction itself lives in
+    that view (sql/05_views.sql), computed once for all wells, rather than
+    duplicated here - this used to be a hand-copy of the same CTE chain,
+    parameterized to one well; see the view's own comment for the technique,
+    the censoring behaviour of restart_date, and the exact-calendar-date
+    checkpoint methodology recovery_pct inherits from A5.
     """
     df = run_query(f"""
-        WITH daily_state AS (
-            SELECT production_date, is_active, bore_oil_vol
-            FROM {VIEW_DAILY}
-            WHERE npd_well_bore_code = %s AND on_stream_hrs IS NOT NULL
-        ),
-        flagged AS (
-            SELECT *,
-                LAG(is_active) OVER (ORDER BY production_date) AS previous_is_active
-            FROM daily_state
-        ),
-        episode_marks AS (
-            SELECT *,
-                CASE
-                    WHEN previous_is_active IS NULL THEN 1
-                    WHEN is_active IS DISTINCT FROM previous_is_active THEN 1
-                    ELSE 0
-                END AS starts_new_episode
-            FROM flagged
-        ),
-        episode_ids AS (
-            SELECT *,
-                SUM(starts_new_episode) OVER (ORDER BY production_date) AS episode_id
-            FROM episode_marks
-        ),
-        episodes AS (
-            SELECT episode_id, is_active,
-                bool_or(previous_is_active IS NULL) AS is_first_episode,
-                MIN(production_date) AS episode_start
-            FROM episode_ids
-            GROUP BY episode_id, is_active
-        ),
-        episodes_seq AS (
-            SELECT *,
-                LEAD(episode_start) OVER (ORDER BY episode_id) AS next_episode_start
-            FROM episodes
-        ),
-        shutdowns AS (
-            SELECT episode_start AS shutdown_date, next_episode_start AS restart_date
-            FROM episodes_seq
-            WHERE is_active = false AND NOT is_first_episode
-        )
-        SELECT
-            s.shutdown_date,
-            s.restart_date,
-            (s.restart_date - s.shutdown_date) AS offline_days,
-            b.bore_oil_vol AS oil_before,
-            a.bore_oil_vol AS oil_after,
-            ROUND(100.0 * a.bore_oil_vol / NULLIF(b.bore_oil_vol, 0), 1) AS recovery_pct
-        FROM shutdowns s
-        LEFT JOIN {VIEW_DAILY} b
-            ON b.npd_well_bore_code = %s AND b.production_date = s.shutdown_date - 1
-        LEFT JOIN {VIEW_DAILY} a
-            ON a.npd_well_bore_code = %s AND a.production_date = s.restart_date
-        ORDER BY s.shutdown_date
-    """, (well_code, well_code, well_code))
+        SELECT shutdown_date, restart_date, offline_days, oil_before, oil_after, recovery_pct
+        FROM {VIEW_DOWNTIME}
+        WHERE npd_well_bore_code = %s
+        ORDER BY shutdown_date
+    """, (well_code,))
     df["shutdown_date"] = pd.to_datetime(df["shutdown_date"])
     df["restart_date"] = pd.to_datetime(df["restart_date"])
     return df

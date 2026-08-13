@@ -306,120 +306,25 @@ ORDER BY total_transitions DESC;
 --
 -- A11 counts transitions (state flips between consecutive records) but
 -- doesn't say how long a well stayed down or what happened to production
--- around it. This groups consecutive same-state days into episodes using
--- the "gaps and islands" pattern: LAG() flags each day where the state
--- differs from the previous recorded day, a running SUM() of those flags
--- assigns every day a group id, and GROUP BY that id collapses each run of
--- same-state days into a single episode row.
---
--- Only inactive episodes with an *observed* preceding active day count as
--- a shutdown - a well's very first recorded day can already be inactive
--- with no prior state to compare against (a data-window edge, not an
--- observed shutdown), and excluding it is what makes the episode count
--- match A11's transition count exactly (verified against all 7 wells).
--- Restart date is the following episode's start; a well still inactive at
--- the end of its recorded history has a shutdown_date but no restart_date
--- (censored - still down when the data ends, not a zero-length outage).
---
--- LEAD() must be computed over ALL episodes, before filtering to inactive
--- ones - computing it after the WHERE filter (an earlier version of this
--- query did) makes LEAD() skip the intervening active episode entirely and
--- pair each shutdown with the START OF THE NEXT SHUTDOWN instead of its
--- own restart, silently inflating offline_days for any well with active
--- runs longer than one episode between shutdowns.
---
--- Oil before/after use the same exact-calendar-date checkpoint methodology
--- as A5: the day immediately before shutdown_date, and the restart_date
--- itself, no interpolation. Recovery % inherits A5's statistical trap - a
--- near-zero oil_before baseline turns a small absolute change into a
--- triple-digit swing (e.g. 0.55 Sm³/d before vs. 50.3 Sm³/d after reads as
--- +9145%). Always read oil_before/oil_after alongside the percentage, not
--- instead of it. Injection wells have no oil measurement at all
--- (bore_oil_vol is NULL, not zero) - these rows resolve as blank, correctly
--- reflecting that "oil recovery" doesn't apply to a water injector.
+-- around it. The episode reconstruction itself ("gaps and islands":
+-- LAG() + running SUM() as a group id) lives in
+-- analytics.vw_downtime_episodes (sql/05_views.sql), not here - it used to
+-- be duplicated by hand between this query and app/queries.py's
+-- well_downtime_episodes(), which needs the identical logic for a single
+-- well at a time on the dashboard. See that view's own comment for the
+-- full technique explanation, the censoring behaviour of restart_date, and
+-- why oil recovery uses exact-calendar-date checkpoints (same as A5).
 -- -----------------------------------------------------------------------------
-WITH daily_state AS (
-    SELECT
-        npd_well_bore_code,
-        production_date,
-        (on_stream_hrs > 0) AS is_active,
-        bore_oil_vol
-    FROM core.daily_production
-    WHERE on_stream_hrs IS NOT NULL
-),
--- ST03 false positive below: "flagged" is used in episode_marks (FROM flagged),
--- a knock-on effect of the IS DISTINCT FROM parser limitation noqa'd further down.
-flagged AS (  -- noqa: ST03
-    SELECT
-        *,
-        LAG(is_active) OVER (
-            PARTITION BY npd_well_bore_code ORDER BY production_date
-        ) AS previous_is_active
-    FROM daily_state
-),
-episode_marks AS (
-    SELECT
-        *,
-        CASE  -- noqa: PRS
-            WHEN previous_is_active IS NULL THEN 1
-            WHEN is_active IS DISTINCT FROM previous_is_active THEN 1  -- noqa: PRS
-            ELSE 0
-        END AS starts_new_episode
-    FROM flagged
-),
-episode_ids AS (
-    SELECT
-        *,
-        SUM(starts_new_episode) OVER (
-            PARTITION BY npd_well_bore_code ORDER BY production_date
-        ) AS episode_id
-    FROM episode_marks
-),
-episodes AS (
-    SELECT
-        npd_well_bore_code,
-        episode_id,
-        is_active,
-        BOOL_OR(previous_is_active IS NULL) AS is_first_episode,
-        MIN(production_date) AS episode_start,
-        MAX(production_date) AS episode_end
-    FROM episode_ids
-    GROUP BY npd_well_bore_code, episode_id, is_active
-),
-episodes_seq AS (
-    SELECT
-        *,
-        LEAD(episode_start) OVER (
-            PARTITION BY npd_well_bore_code ORDER BY episode_id
-        ) AS next_episode_start
-    FROM episodes
-),
-shutdowns AS (
-    SELECT
-        npd_well_bore_code,
-        episode_start AS shutdown_date,
-        next_episode_start AS restart_date
-    FROM episodes_seq
-    WHERE is_active = FALSE
-      AND NOT is_first_episode
-)
 SELECT
-    w.npd_well_bore_name AS wellbore_name,
-    s.shutdown_date,
-    s.restart_date,
-    (s.restart_date - s.shutdown_date) AS offline_days,
-    b.bore_oil_vol AS oil_before,
-    a.bore_oil_vol AS oil_after,
-    ROUND(100.0 * a.bore_oil_vol / NULLIF(b.bore_oil_vol, 0), 1) AS recovery_pct
-FROM shutdowns s
-JOIN core.wellbore w ON w.npd_well_bore_code = s.npd_well_bore_code
-LEFT JOIN core.daily_production b
-    ON b.npd_well_bore_code = s.npd_well_bore_code
-   AND b.production_date = s.shutdown_date - 1
-LEFT JOIN core.daily_production a
-    ON a.npd_well_bore_code = s.npd_well_bore_code
-   AND a.production_date = s.restart_date
-ORDER BY w.npd_well_bore_name, s.shutdown_date;
+    wellbore_name,
+    shutdown_date,
+    restart_date,
+    offline_days,
+    oil_before,
+    oil_after,
+    recovery_pct
+FROM analytics.vw_downtime_episodes
+ORDER BY wellbore_name, shutdown_date;
 
 
 -- -----------------------------------------------------------------------------

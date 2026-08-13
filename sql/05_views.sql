@@ -15,6 +15,7 @@
 --      |-- vw_monthly_well_performance   (daily -> SQL aggregation, analytical)
 --      |-- vw_well_lifetime_summary      (one row per wellbore)
 --      |-- vw_field_monthly_summary      (one row per calendar month, field-wide)
+--      |-- vw_downtime_episodes          (shutdown/restart episode reconstruction)
 --      +-- vw_data_quality_review        (identifiable DQ-flagged records)
 --              |
 --              v
@@ -25,6 +26,14 @@
 -- here - those belong in 06_analysis.sql first. A calculation only gets
 -- promoted into a view once an actual analysis in 06 needs it more than
 -- once. Same discipline applies to indexes: none are added here either.
+--
+-- vw_downtime_episodes is that rule firing, not an exception to it: its
+-- "gaps and islands" CTE chain used to be hand-duplicated between
+-- 06_analysis.sql's "A11 extended" query and app/queries.py's
+-- well_downtime_episodes() (one field-wide, one parameterized to a single
+-- well) - two copies of the same LAG()/running-SUM() logic to keep in sync
+-- by hand. It is genuinely needed by more than one consumer, so it moved
+-- here; both call sites now just SELECT from it.
 --
 -- vw_monthly_well_performance is deliberately NOT a wrapper around
 -- core.monthly_reference. It is calculated independently, from
@@ -180,6 +189,129 @@ GROUP BY year, month, month_start;
 
 COMMENT ON VIEW analytics.vw_field_monthly_summary IS
     'One row per calendar month, aggregated across all 7 wellbores - the Volve field evolution view. active_wells requires on_stream_hrs > 0, not merely a recorded row that month.';
+
+
+-- -----------------------------------------------------------------------------
+-- analytics.vw_downtime_episodes
+--
+-- Extends A11 (transition counting, in 06_analysis.sql) to reconstruct full
+-- downtime episodes: "gaps and islands" groups consecutive same-state days
+-- into one episode using LAG() to flag each day whose state differs from
+-- the previous recorded day, a running SUM() of those flags to assign every
+-- day a group id, and GROUP BY that id to collapse each run into one row.
+-- One row per shutdown episode, across all wellbores.
+--
+-- Only inactive episodes with an *observed* preceding active day count as a
+-- shutdown - a well's very first recorded day can already be inactive with
+-- no prior state to compare against (a data-window edge, not an observed
+-- shutdown); excluding it is what makes the episode count match A11's
+-- transition count exactly (verified against all 7 wells). restart_date is
+-- NULL for a well still inactive at the end of its recorded history
+-- (censored - still down when the data ends, not a zero-length outage).
+--
+-- LEAD() is computed over ALL episodes, before filtering to inactive ones -
+-- computing it after the WHERE filter makes LEAD() skip the intervening
+-- active episode entirely and pair each shutdown with the START OF THE NEXT
+-- SHUTDOWN instead of its own restart, silently inflating offline_days for
+-- any well with active runs longer than one episode between shutdowns.
+--
+-- oil_before/oil_after use the same exact-calendar-date checkpoint
+-- methodology as A5: the day immediately before shutdown_date, and
+-- restart_date itself, no interpolation. recovery_pct inherits A5's
+-- statistical trap - a near-zero oil_before baseline turns a small absolute
+-- change into a triple-digit swing. Always read oil_before/oil_after
+-- alongside the percentage, not instead of it. Injection wells have no oil
+-- measurement at all (bore_oil_vol is NULL, not zero) - these rows resolve
+-- as blank, correctly reflecting that "oil recovery" doesn't apply to a
+-- water injector.
+-- -----------------------------------------------------------------------------
+
+CREATE OR REPLACE VIEW analytics.vw_downtime_episodes AS
+WITH daily_state AS (
+    SELECT
+        npd_well_bore_code,
+        production_date,
+        (on_stream_hrs > 0) AS is_active,
+        bore_oil_vol
+    FROM core.daily_production
+    WHERE on_stream_hrs IS NOT NULL
+),
+-- ST03 false positive below: "flagged" is used in episode_marks (FROM flagged),
+-- a knock-on effect of the IS DISTINCT FROM parser limitation noqa'd further down.
+flagged AS (  -- noqa: ST03
+    SELECT
+        *,
+        LAG(is_active) OVER (
+            PARTITION BY npd_well_bore_code ORDER BY production_date
+        ) AS previous_is_active
+    FROM daily_state
+),
+episode_marks AS (
+    SELECT
+        *,
+        CASE  -- noqa: PRS
+            WHEN previous_is_active IS NULL THEN 1
+            WHEN is_active IS DISTINCT FROM previous_is_active THEN 1  -- noqa: PRS
+            ELSE 0
+        END AS starts_new_episode
+    FROM flagged
+),
+episode_ids AS (
+    SELECT
+        *,
+        SUM(starts_new_episode) OVER (
+            PARTITION BY npd_well_bore_code ORDER BY production_date
+        ) AS episode_id
+    FROM episode_marks
+),
+episodes AS (
+    SELECT
+        npd_well_bore_code,
+        episode_id,
+        is_active,
+        BOOL_OR(previous_is_active IS NULL) AS is_first_episode,
+        MIN(production_date) AS episode_start,
+        MAX(production_date) AS episode_end
+    FROM episode_ids
+    GROUP BY npd_well_bore_code, episode_id, is_active
+),
+episodes_seq AS (
+    SELECT
+        *,
+        LEAD(episode_start) OVER (
+            PARTITION BY npd_well_bore_code ORDER BY episode_id
+        ) AS next_episode_start
+    FROM episodes
+),
+shutdowns AS (
+    SELECT
+        npd_well_bore_code,
+        episode_start AS shutdown_date,
+        next_episode_start AS restart_date
+    FROM episodes_seq
+    WHERE is_active = FALSE
+      AND NOT is_first_episode
+)
+SELECT
+    s.npd_well_bore_code,
+    w.npd_well_bore_name AS wellbore_name,
+    s.shutdown_date,
+    s.restart_date,
+    (s.restart_date - s.shutdown_date) AS offline_days,
+    b.bore_oil_vol AS oil_before,
+    a.bore_oil_vol AS oil_after,
+    ROUND(100.0 * a.bore_oil_vol / NULLIF(b.bore_oil_vol, 0), 1) AS recovery_pct
+FROM shutdowns s
+JOIN core.wellbore w ON w.npd_well_bore_code = s.npd_well_bore_code
+LEFT JOIN core.daily_production b
+    ON b.npd_well_bore_code = s.npd_well_bore_code
+   AND b.production_date = s.shutdown_date - 1
+LEFT JOIN core.daily_production a
+    ON a.npd_well_bore_code = s.npd_well_bore_code
+   AND a.production_date = s.restart_date;
+
+COMMENT ON VIEW analytics.vw_downtime_episodes IS
+    'One row per shutdown episode ("gaps and islands" reconstruction from core.daily_production), across all wellbores. restart_date is NULL for an episode still open at the end of recorded history (censored, not zero-length). oil_before/oil_after are exact-calendar-date checkpoints, same methodology as A5 in sql/06_analysis.sql - not interpolated or smoothed.';
 
 
 -- -----------------------------------------------------------------------------

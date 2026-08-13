@@ -230,6 +230,7 @@ the verified output of the one before it:
    vw_monthly_well_performance   - core.daily_production aggregated to month (independent of monthly_reference)
    vw_well_lifetime_summary      - one row per wellbore
    vw_field_monthly_summary      - one row per calendar month, field-wide
+   vw_downtime_episodes          - one row per shutdown episode, "gaps and islands" reconstruction
    vw_data_quality_review        - row-level DQ-001/003/004/005/006 caution list
 ```
 
@@ -273,7 +274,7 @@ hidden.
 | `sql/03_create_indexes.sql` | Deliberate no-op — see [Section 11](#11-database-design-decisions) |
 | `src/load_postgres.py` | Python ETL: loads `raw` from the workbook, then SQL-transforms `raw → core` inside a single transaction (truncate-and-reload, idempotent) |
 | `sql/04_quality_checks.sql` | 27 automated checks (`QC-001`–`QC-021`, `DQ-001`–`DQ-006`), each PASS/FAIL/REVIEW, re-verifying the notebook's findings against the live database |
-| `sql/05_views.sql` | 5 analyst-facing views — deliberately not a "KPI factory"; no derived business ratios until an analysis question needs one more than once |
+| `sql/05_views.sql` | 6 analyst-facing views — deliberately not a "KPI factory"; no derived business ratios until an analysis question needs one more than once (`vw_downtime_episodes` is that rule firing: promoted once both `sql/06_analysis.sql` and `app/queries.py` needed the same episode-reconstruction logic) |
 | `sql/06_analysis.sql` | 12 engineering questions, A1–A12 |
 | `sql/07_app_role.sql` | Creates `volve_app`, a least-privilege role with `SELECT` on `analytics` only, for `app/` |
 | `app/` | Streamlit dashboard + "Ask the Data" NL-to-SQL page, both built directly on `analytics.*` and the A1–A12 questions — see `app/README.md` |

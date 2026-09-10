@@ -15,6 +15,14 @@ import queries as q
 st.title("Well Performance")
 
 wells = q.list_wells()
+if wells.empty:
+    # Finding 14 of the 2026-09-09 security review: a schema-only/no-data
+    # database made every line below crash (an empty selectbox, then
+    # .iloc[0] on an empty filter) instead of this page showing a clear
+    # no-data state. Caught via a real dashboard smoke test (Streamlit's
+    # AppTest), not just inspection - see tests/test_dashboard_smoke.py.
+    st.info("No wellbores are loaded in this database yet.")
+    st.stop()
 well_type_by_name = dict(zip(wells["wellbore_name"], wells["well_type_label"]))
 well_name = st.selectbox(
     "Select well", wells["wellbore_name"],
@@ -41,13 +49,18 @@ has_oil_production = daily["bore_oil_vol"].notna().any()
 r1c1, r1c2, r1c3, r1c4 = st.columns(4)
 r1c1.metric("Cumulative oil (Sm³)", f"{lifetime['total_oil']:,.0f}" if lifetime["total_oil"] is not None else "n/a")
 r1c2.metric("Peak oil (Sm³/d)", f"{lifetime['peak_daily_oil']:,.0f}" if lifetime["peak_daily_oil"] is not None else "n/a")
+_has_known_state_day = snapshot["latest_record_date"] is not None and not pd.isna(snapshot["latest_record_date"])
 r1c3.metric(
     "Latest oil (Sm³/d)",
     f"{snapshot['latest_oil_rate']:,.1f}" if snapshot["latest_oil_rate"] is not None else "n/a",
     help=(
-        f"As of {snapshot['latest_record_date'].date()}, this well's most "
-        f"recently recorded day - "
-        + ("active." if snapshot["latest_is_active"] else "inactive on that date, not a decline to zero.")
+        (
+            f"As of {snapshot['latest_record_date'].date()}, this well's most "
+            f"recently recorded day - "
+            + ("active." if snapshot["latest_is_active"] else "inactive on that date, not a decline to zero.")
+        )
+        if _has_known_state_day
+        else "No day with a known on-stream-hours reading is recorded for this well."
     ),
 )
 r1c4.metric("Availability", f"{availability:.1f}%" if availability is not None else "n/a")
@@ -163,17 +176,28 @@ fig3.update_layout(yaxis_title="Hours / day", xaxis_title=None)
 st.plotly_chart(fig3, width="stretch")
 
 ac1, ac2, ac3, ac4 = st.columns(4)
-ac1.metric("Offline days", f"{completed['offline_days'].sum():,.0f}" if not completed.empty else "0")
-ac2.metric("Longest outage", f"{completed['offline_days'].max():,.0f} d" if not completed.empty else "n/a")
-ac3.metric("Median outage", f"{completed['offline_days'].median():,.0f} d" if not completed.empty else "n/a")
+ac1.metric(
+    "Observed offline days", f"{completed['observed_inactive_days'].sum():,.0f}" if not completed.empty else "0",
+    help="Days actually recorded with ON_STREAM_HRS = 0 - not the elapsed calendar span "
+         "between shutdown and restart, which can include days with no reading at all.",
+)
+ac2.metric("Longest outage (elapsed)", f"{completed['elapsed_span_days'].max():,.0f} d" if not completed.empty else "n/a")
+ac3.metric("Median outage (elapsed)", f"{completed['elapsed_span_days'].median():,.0f} d" if not completed.empty else "n/a")
 ac4.metric("Restarts", len(completed))
+_unknown_total = completed["unknown_days"].sum() if not completed.empty else 0
 st.caption(
     "Availability = on-stream hours as a % of hours across days with a "
     "known state (days with no on-stream-hours reading are excluded, not "
-    "counted as inactive)."
+    "counted as inactive). \"Elapsed\" outage duration is calendar time "
+    "between shutdown and restart; \"Observed offline days\" counts only "
+    "days actually recorded at 0 hours within that span - the "
+    + (f"{_unknown_total:,.0f} remaining day(s) across completed episodes have no "
+       "on-stream-hours reading at all (a missing date or a blank cell) and are not "
+       "asserted as downtime, just unresolved."
+       if _unknown_total else "two figures agree exactly for this well's completed episodes.")
     + (f" {still_down} inactive episode had no restart before this well's "
        "last recorded day - still inactive when the record ends (duration "
-       "unknown), excluded from offline-day totals above."
+       "unknown), excluded from the totals above."
        if still_down else "")
 )
 
@@ -221,7 +245,8 @@ if not episodes.empty:
         episodes[oil_col] = pd.to_numeric(episodes[oil_col], errors="coerce")
     table = episodes.rename(columns={
         "shutdown_date": "Shutdown", "restart_date": "Restart",
-        "offline_days": "Offline days", "oil_before": "Oil before (Sm³/d)",
+        "elapsed_span_days": "Elapsed days", "observed_inactive_days": "Observed offline days",
+        "unknown_days": "Unknown-state days", "oil_before": "Oil before (Sm³/d)",
         "oil_after": "Oil after (Sm³/d)", "recovery_pct": "Recovery %",
     })
     st.dataframe(
@@ -233,6 +258,13 @@ if not episodes.empty:
         },
     )
     st.caption(
+        "\"Elapsed days\" is calendar time between shutdown and restart; "
+        "\"Observed offline days\" counts only days actually recorded at 0 "
+        "hours in that span; \"Unknown-state days\" (elapsed minus observed) "
+        "had no on-stream-hours reading at all - not asserted as downtime, "
+        "just unresolved. A still-open episode (blank Restart) leaves all "
+        "three blank rather than a false zero - see the caption above for "
+        "how many episodes that applies to. "
         "Oil before/after are exact-date checkpoints (the day before the "
         "shutdown, the day of the restart), not a smoothed trend - same "
         "methodology as A5's peak-vs-checkpoint comparison. Recovery % can "

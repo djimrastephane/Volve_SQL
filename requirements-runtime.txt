@@ -1,0 +1,33 @@
+# requirements-runtime.txt
+#
+# Strict subset of requirements.txt for a deployed dashboard/loader - no
+# test/lint tooling (pytest, sqlfluff) or notebook kernel packages
+# (ipykernel, nbformat, nbclient), none of which the running application
+# ever imports. Phase 4 of the 2026-09-09 security review ("make builds
+# and supply-chain checks reproducible"): a smaller installed footprint
+# is a smaller vulnerability surface and a smaller image to scan/ship.
+#
+# requirements.txt remains the file `make setup`/local development use
+# (everything needed to also run `make check` and the notebooks) - this
+# file changes nothing about that, existing workflows are unaffected.
+# Keep both files' shared package versions in sync by hand; there is no
+# automated check for that today (see README "Production deployment
+# prerequisites" for what else a real deployment still has to decide).
+
+# Source-file interaction (src/load_postgres.py, src/profile_source.py)
+pandas==3.0.5
+openpyxl==3.1.5
+
+# PostgreSQL loading and connections (src/load_postgres.py, app/db.py)
+psycopg2-binary==2.9.12
+
+# Dashboard (app/) - queries analytics.* views only, via the volve_app role
+# (sql/07_app_role.sql)
+streamlit==1.61.1
+plotly==6.9.0
+
+# Ask the Data (app/nlsql.py) - talks to a local Ollama server, not a pip
+# package. Install separately: https://ollama.com, then
+# `ollama pull qwen2.5-coder:14b` (or set OLLAMA_MODEL to a model you have).
+requests==2.34.2
+sqlglot==30.17.0

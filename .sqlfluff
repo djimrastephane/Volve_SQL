@@ -28,3 +28,13 @@ dialect = postgres
 # join column, fixed join/column ordering) this project doesn't follow and
 # that would require rewriting working queries with no correctness benefit.
 exclude_rules = layout, aliasing, references.keywords, capitalisation.types, ambiguous.join, structure.join_condition_order, structure.column_order
+
+# sql/05_views.sql grew past sqlfluff's default 20000-byte
+# large_file_skip_byte_limit (2026-09-09 security review remediation:
+# analytics.vw_downtime_episodes gained an elapsed/observed/unknown-days
+# breakdown, finding 7) - past that limit sqlfluff SILENTLY SKIPS linting
+# the file entirely rather than erroring, which would have made `make
+# check`/CI's sql-lint job report green without actually linting it.
+# Raised with headroom, not disabled outright, so a truly runaway file
+# still gets flagged.
+large_file_skip_byte_limit = 40000

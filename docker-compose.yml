@@ -7,20 +7,27 @@
 # environment variables, so nothing else changes once this is running -
 # see "Using this" below.
 #
-# POSTGRES_HOST_AUTH_METHOD=trust matches this project's actual local-dev
-# assumption, not a shortcut invented for this file: sql/07_app_role.sql
-# creates the dashboard's volve_app role with no password on purpose,
-# because local Homebrew PostgreSQL uses trust auth for local connections
-# (see that file's own comment) - this setting makes the containerized
-# Postgres behave the same way, so volve_app (and every other role) stays
-# connectable exactly as the rest of the project already assumes. Not
-# meant for any real network exposure - see 07_app_role.sql's comment on
-# what a real deployment should do instead.
+# Password-authenticated (scram-sha-256), bound to 127.0.0.1 only - a
+# 2026-09-09 security review flagged the previous config
+# (POSTGRES_HOST_AUTH_METHOD=trust + a bare, host-address-less port
+# publish) as reachable from any client that could reach the published
+# port, with no credential required, on ANY host interface (Docker
+# publishes to all interfaces by default when no host address is given -
+# https://docs.docker.com/get-started/docker-concepts/running-containers/publishing-ports/).
+# This config still requires no external network configuration to use
+# locally, but now requires an explicit password (never committed - see
+# below) and cannot be reached from outside this machine.
 #
 # Using this:
+#   export VOLVE_PG_PASSWORD=<pick any local password>
+#                                  # required - compose refuses to start
+#                                  # without it (no committed default).
+#                                  # Put it in a git-ignored .env file
+#                                  # (see .gitignore) to avoid retyping it,
+#                                  # never in a tracked file.
 #   make docker-up                # not `docker compose up -d` directly -
 #                                  # see that Makefile target for why
-#   export PGHOST=localhost       # libpq defaults to a local Unix socket
+#   export PGHOST=127.0.0.1       # libpq defaults to a local Unix socket
 #                                  # otherwise, which a container can't provide
 #   export PGUSER=postgres        # the official image only creates a
 #                                  # "postgres" superuser role - Homebrew's
@@ -28,7 +35,15 @@
 #                                  # matching your OS username, which is
 #                                  # what every psql/createdb call in this
 #                                  # project's Makefile relies on by default
-#   make setup && make load-fixture && make check && make app
+#   export PGPASSWORD=$VOLVE_PG_PASSWORD
+#   make setup
+#   export VOLVE_APP_DB_PASSWORD=<pick a second local password>
+#   make docker-set-app-password  # volve_app has no password by default
+#                                  # (sql/07_app_role.sql: correct for
+#                                  # native Homebrew trust auth, not for
+#                                  # this container's password auth) - see
+#                                  # that Makefile target
+#   make load-fixture && make check && make app
 #
 # If port 5432 is already taken - most likely by a native PostgreSQL
 # install - `make docker-up` detects it up front and refuses to start
@@ -38,21 +53,35 @@
 # client connecting to localhost:5432 silently reaches the native one).
 # Use a different port instead:
 #   VOLVE_PG_PORT=5433 make docker-up
-#   export PGHOST=localhost PGPORT=5433 PGUSER=postgres
+#   export PGHOST=127.0.0.1 PGPORT=5433 PGUSER=postgres
 #
-# Verified end-to-end (all four make targets, all 76 pytest tests, and the
-# dashboard actually connecting as volve_app) against this exact config
-# before committing it, not just written and assumed to work.
+# This file is for local development only. A shared/production deployment
+# needs its own decisions this file deliberately does not make: a private
+# network with no host-published port at all (rather than a
+# loopback-published one), verified TLS for any remote connection, and
+# credentials issued by whatever secret-management approach that
+# deployment uses - see README "Production deployment prerequisites".
 
 services:
   postgres:
     image: postgres:17
     container_name: volve_sql_postgres
     environment:
-      POSTGRES_HOST_AUTH_METHOD: trust
+      # No default - `docker compose up` fails fast with a clear message
+      # if this isn't set, rather than silently starting an unprotected
+      # database or (worse) one whose password is a value committed here.
+      POSTGRES_PASSWORD: ${VOLVE_PG_PASSWORD:?Set VOLVE_PG_PASSWORD before starting - see this file's header comment}
       POSTGRES_DB: volve_analytics
+      # scram-sha-256, not trust: every role (postgres and, once
+      # `make docker-set-app-password` runs, volve_app) must authenticate
+      # with a password to connect, on every interface this container's
+      # port is reachable from.
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
     ports:
-      - "${VOLVE_PG_PORT:-5432}:5432"
+      # Bound to loopback explicitly - omitting a host address (the
+      # previous "${VOLVE_PG_PORT:-5432}:5432") publishes on every host
+      # interface, not just localhost.
+      - "127.0.0.1:${VOLVE_PG_PORT:-5432}:5432"
     volumes:
       - volve_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -60,6 +89,14 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    # Bounded resources for a local dev/test container - not a production
+    # sizing decision, just a ceiling so a runaway query or load can't
+    # consume the whole host.
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1g
 
 volumes:
   volve_pgdata:

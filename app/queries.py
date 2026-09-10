@@ -88,16 +88,29 @@ def field_lifetime_summary() -> pd.DataFrame:
             MIN(first_record_date) AS first_record_date, MAX(last_record_date) AS last_record_date
         FROM {VIEW_LIFETIME}
     """)
+    # A bare SELECT of two scalar subqueries, not GROUP BY + ORDER BY +
+    # LIMIT 1 - the latter returns ZERO rows on an empty/no-oil dataset
+    # (a schema-only database, or a snapshot where no well ever produced
+    # oil), which made peak.iloc[0] below crash the page instead of
+    # showing a no-data state (finding 14 of the 2026-09-09 security
+    # review). A bare SELECT with no FROM always returns exactly one row;
+    # both scalar subqueries are NULL together when daily_oil is empty.
     peak = run_query(f"""
-        SELECT production_date AS peak_date, SUM(bore_oil_vol) AS peak_oil_rate
-        FROM {VIEW_DAILY}
-        WHERE bore_oil_vol IS NOT NULL
-        GROUP BY production_date
-        ORDER BY peak_oil_rate DESC
-        LIMIT 1
+        WITH daily_oil AS (
+            SELECT production_date, SUM(bore_oil_vol) AS oil_rate
+            FROM {VIEW_DAILY}
+            WHERE bore_oil_vol IS NOT NULL
+            GROUP BY production_date
+        )
+        SELECT
+            (SELECT production_date FROM daily_oil ORDER BY oil_rate DESC LIMIT 1) AS peak_date,
+            (SELECT MAX(oil_rate) FROM daily_oil) AS peak_oil_rate
     """)
     row = pd.concat([totals.iloc[0], peak.iloc[0]])
-    row["field_life_years"] = (row["last_record_date"] - row["first_record_date"]).days / 365.25
+    if pd.isna(row["first_record_date"]) or pd.isna(row["last_record_date"]):
+        row["field_life_years"] = None
+    else:
+        row["field_life_years"] = (row["last_record_date"] - row["first_record_date"]).days / 365.25
     return row
 
 
@@ -212,10 +225,18 @@ def active_wells_by_type() -> pd.DataFrame:
     makes a line chart interpolate straight across a real dip to zero
     instead of showing it.
     """
+    # date_trunc(MIN(production_date)), not MIN(year) and MIN(month) taken
+    # independently and recombined - that construction silently invents
+    # months before the data actually starts whenever the earliest MONTH
+    # value (across the whole recorded history) is smaller than the month
+    # the earliest DATE actually falls in, e.g. a dataset starting
+    # 2007-09-01 with any later January on record would compute
+    # MIN(month)=1 and misreport 2007-01-01 as the first month - 8 months
+    # of fabricated zero-active-well grid rows the source never claims.
+    # Finding 8 of the 2026-09-09 security review.
     bounds = run_query(f"""
         SELECT
-            make_date(MIN(EXTRACT(YEAR FROM production_date)::int),
-                       MIN(EXTRACT(MONTH FROM production_date)::int), 1) AS first_month,
+            date_trunc('month', MIN(production_date))::date AS first_month,
             MAX(production_date) AS last_date
         FROM {VIEW_DAILY}
     """)
@@ -229,6 +250,16 @@ def active_wells_by_type() -> pd.DataFrame:
         FROM {VIEW_DAILY}
         WHERE on_stream_hrs > 0
     """)
+    # Finding 14 of the 2026-09-09 security review: a schema-only/no-data
+    # database makes bounds' first_month/last_date both NULL - passing
+    # both as None to pd.date_range() raises ("exactly three of start,
+    # end, periods, freq must be specified") instead of this page
+    # showing an empty chart. Caught via a real dashboard smoke test
+    # (Streamlit's AppTest, not just calling this function directly),
+    # not by inspection - see tests/test_dashboard_smoke.py.
+    if pd.isna(bounds["first_month"].iloc[0]) or pd.isna(bounds["last_date"].iloc[0]):
+        return pd.DataFrame(columns=["month_start", "well_type", "active_wells"])
+
     wells = list_wells()
     merged = daily_active.merge(wells[["npd_well_bore_code", "well_type_label"]], on="npd_well_bore_code")
     counts = (
@@ -270,6 +301,17 @@ def well_snapshot(well_code: int) -> pd.DataFrame:
     which is 0 for a well that ended shut-in (not a decline to zero) -
     always paired with latest_record_date and latest_is_active so that
     distinction is visible, not implied.
+
+    LEFT JOIN, not the previous plain `FROM latest, first_oil` (an
+    implicit CROSS JOIN) - a well with no on_stream_hrs IS NOT NULL day
+    at all (every recorded day has unknown operating hours) makes
+    `latest` return zero rows, and a CROSS JOIN against zero rows returns
+    zero rows overall even though first_oil (a bare aggregate) always has
+    exactly one. That crashed this function's only caller at .iloc[0]
+    instead of showing a no-data state (finding 14 of the 2026-09-09
+    security review, "a well without known operating hours"). first_oil
+    is the LEFT side specifically because it is the side guaranteed to
+    return exactly one row regardless of data.
     """
     df = run_query(f"""
         WITH latest AS (
@@ -289,7 +331,8 @@ def well_snapshot(well_code: int) -> pd.DataFrame:
             latest.bore_oil_vol AS latest_oil_rate,
             latest.is_active AS latest_is_active,
             first_oil.first_oil_date
-        FROM latest, first_oil
+        FROM first_oil
+        LEFT JOIN latest ON true
     """, (well_code, well_code))
     df["latest_record_date"] = pd.to_datetime(df["latest_record_date"])
     df["first_oil_date"] = pd.to_datetime(df["first_oil_date"])
@@ -360,7 +403,8 @@ def well_downtime_episodes(well_code: int) -> pd.DataFrame:
     checkpoint methodology recovery_pct inherits from A5.
     """
     df = run_query(f"""
-        SELECT shutdown_date, restart_date, offline_days, oil_before, oil_after, recovery_pct
+        SELECT shutdown_date, restart_date, elapsed_span_days, observed_inactive_days,
+               unknown_days, oil_before, oil_after, recovery_pct
         FROM {VIEW_DOWNTIME}
         WHERE npd_well_bore_code = %s
         ORDER BY shutdown_date
@@ -421,29 +465,58 @@ def normalized_profiles(well_codes: list[int]) -> pd.DataFrame:
     day (A3) and expressed as % of that well's peak daily oil (A4) - lets
     wells that started producing on different calendar dates be compared
     on the same decline-shape axis.
+
+    pct_of_peak_smoothed_30d is a trailing 30-CALENDAR-day average (SQL
+    window RANGE BETWEEN INTERVAL '29 days' PRECEDING AND CURRENT ROW,
+    ordered by the actual production_date), not a 30-ROW average -
+    finding 9 of the 2026-09-09 security review: missing dates and
+    NULL-oil days are absent from this result entirely (not zero-filled),
+    so a 30-ROW rolling mean silently stretched across however many
+    calendar days those 30 actual observations happened to span, with no
+    indication of how sparse that window was. window_observations exposes
+    that coverage directly - how many actual readings fed each smoothed
+    point - so a thin window (e.g. right after a multi-week gap) is
+    visible instead of looking identical to a fully-observed one.
     """
     if not well_codes:
-        return pd.DataFrame(columns=["wellbore_name", "days_since_first_oil", "pct_of_peak"])
+        return pd.DataFrame(columns=[
+            "wellbore_name", "days_since_first_oil", "pct_of_peak",
+            "pct_of_peak_smoothed_30d", "window_observations",
+        ])
     df = run_query(f"""
         WITH first_oil AS (
             SELECT npd_well_bore_code, MIN(production_date) AS first_oil_date
             FROM {VIEW_DAILY}
             WHERE bore_oil_vol > 0 AND npd_well_bore_code = ANY(%s)
             GROUP BY npd_well_bore_code
+        ),
+        profile AS (
+            SELECT
+                dp.npd_well_bore_code,
+                dp.wellbore_name,
+                dp.production_date,
+                (dp.production_date - fo.first_oil_date) AS days_since_first_oil,
+                dp.bore_oil_vol,
+                ROUND(100.0 * dp.bore_oil_vol / NULLIF(ls.peak_daily_oil, 0), 1) AS pct_of_peak
+            FROM {VIEW_DAILY} dp
+            JOIN first_oil fo ON fo.npd_well_bore_code = dp.npd_well_bore_code
+            JOIN {VIEW_LIFETIME} ls ON ls.npd_well_bore_code = dp.npd_well_bore_code
+            WHERE dp.npd_well_bore_code = ANY(%s)
+              AND dp.production_date >= fo.first_oil_date
+              AND dp.bore_oil_vol IS NOT NULL
         )
         SELECT
-            dp.wellbore_name,
-            dp.production_date,
-            (dp.production_date - fo.first_oil_date) AS days_since_first_oil,
-            dp.bore_oil_vol,
-            ROUND(100.0 * dp.bore_oil_vol / NULLIF(ls.peak_daily_oil, 0), 1) AS pct_of_peak
-        FROM {VIEW_DAILY} dp
-        JOIN first_oil fo ON fo.npd_well_bore_code = dp.npd_well_bore_code
-        JOIN {VIEW_LIFETIME} ls ON ls.npd_well_bore_code = dp.npd_well_bore_code
-        WHERE dp.npd_well_bore_code = ANY(%s)
-          AND dp.production_date >= fo.first_oil_date
-          AND dp.bore_oil_vol IS NOT NULL
-        ORDER BY dp.wellbore_name, days_since_first_oil
+            wellbore_name, production_date, days_since_first_oil, bore_oil_vol, pct_of_peak,
+            ROUND(AVG(pct_of_peak) OVER (
+                PARTITION BY npd_well_bore_code ORDER BY production_date
+                RANGE BETWEEN INTERVAL '29 days' PRECEDING AND CURRENT ROW
+            ), 1) AS pct_of_peak_smoothed_30d,
+            COUNT(pct_of_peak) OVER (
+                PARTITION BY npd_well_bore_code ORDER BY production_date
+                RANGE BETWEEN INTERVAL '29 days' PRECEDING AND CURRENT ROW
+            ) AS window_observations
+        FROM profile
+        ORDER BY wellbore_name, days_since_first_oil
     """, (well_codes, well_codes))
     return df
 

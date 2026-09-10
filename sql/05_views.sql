@@ -226,7 +226,23 @@ COMMENT ON VIEW analytics.vw_field_monthly_summary IS
 -- water injector.
 -- -----------------------------------------------------------------------------
 
-CREATE OR REPLACE VIEW analytics.vw_downtime_episodes AS
+-- PostgreSQL's CREATE OR REPLACE VIEW cannot rename an existing output
+-- column (confirmed: "cannot change name of view column ... HINT: Use
+-- ALTER VIEW ... RENAME COLUMN") - offline_days was renamed to
+-- elapsed_span_days below (finding 7 of the 2026-09-09 security review;
+-- see the view's own comment for why: it was elapsed calendar time, not
+-- confirmed observed downtime), so a plain CREATE OR REPLACE would fail
+-- on any database that already had the previous version of this view.
+-- Views carry no data of their own - DROP+CREATE is lossless - and
+-- nothing else in this schema is built on top of this specific view (no
+-- other CREATE VIEW references it), so this is safe on both a fresh
+-- install (DROP IF EXISTS is a no-op) and an upgrade from the previous
+-- release. sql/07_app_role.sql's ALTER DEFAULT PRIVILEGES re-grants
+-- SELECT on it automatically once re-created (same owning role); still
+-- re-run that script after this one, as the Makefile/CI already do.
+DROP VIEW IF EXISTS analytics.vw_downtime_episodes;
+
+CREATE VIEW analytics.vw_downtime_episodes AS
 WITH daily_state AS (
     SELECT
         npd_well_bore_code,
@@ -291,18 +307,50 @@ shutdowns AS (
     FROM episodes_seq
     WHERE is_active = FALSE
       AND NOT is_first_episode
+),
+-- Finding 7 of the 2026-09-09 security review: (restart_date -
+-- shutdown_date) is ELAPSED CALENDAR TIME between two observed rows, not
+-- a count of days actually observed inactive - a day inside that span
+-- with no on_stream_hrs reading at all (NULL, excluded from daily_state
+-- above) or no row at all (a missing date) still counts toward the
+-- elapsed span, but was never itself observed as inactive. Counted
+-- separately here: observed_inactive_days is only days with an actual
+-- on_stream_hrs = 0 reading in [shutdown_date, restart_date) - always
+-- <= the elapsed span, and their difference is exactly the unknown-state
+-- day count, not asserted to be more downtime. For a still-open
+-- (censored) episode (restart_date IS NULL), this counts every observed
+-- zero-hours day from shutdown_date through the end of this well's
+-- recorded history - "so far", not a final total - and unknown_days is
+-- left NULL (undefined without a known episode end), same as
+-- elapsed_span_days already is for a censored episode.
+observed_days AS (
+    SELECT
+        s.npd_well_bore_code,
+        s.shutdown_date,
+        COUNT(d.production_date) AS observed_inactive_days
+    FROM shutdowns s
+    LEFT JOIN core.daily_production d
+        ON d.npd_well_bore_code = s.npd_well_bore_code
+       AND d.production_date >= s.shutdown_date
+       AND (s.restart_date IS NULL OR d.production_date < s.restart_date)
+       AND d.on_stream_hrs = 0
+    GROUP BY s.npd_well_bore_code, s.shutdown_date
 )
 SELECT
     s.npd_well_bore_code,
     w.npd_well_bore_name AS wellbore_name,
     s.shutdown_date,
     s.restart_date,
-    (s.restart_date - s.shutdown_date) AS offline_days,
+    (s.restart_date - s.shutdown_date) AS elapsed_span_days,
+    o.observed_inactive_days,
+    (s.restart_date - s.shutdown_date) - o.observed_inactive_days AS unknown_days,
     b.bore_oil_vol AS oil_before,
     a.bore_oil_vol AS oil_after,
     ROUND(100.0 * a.bore_oil_vol / NULLIF(b.bore_oil_vol, 0), 1) AS recovery_pct
 FROM shutdowns s
 JOIN core.wellbore w ON w.npd_well_bore_code = s.npd_well_bore_code
+JOIN observed_days o
+    ON o.npd_well_bore_code = s.npd_well_bore_code AND o.shutdown_date = s.shutdown_date
 LEFT JOIN core.daily_production b
     ON b.npd_well_bore_code = s.npd_well_bore_code
    AND b.production_date = s.shutdown_date - 1
@@ -311,7 +359,7 @@ LEFT JOIN core.daily_production a
    AND a.production_date = s.restart_date;
 
 COMMENT ON VIEW analytics.vw_downtime_episodes IS
-    'One row per shutdown episode ("gaps and islands" reconstruction from core.daily_production), across all wellbores. restart_date is NULL for an episode still open at the end of recorded history (censored, not zero-length). oil_before/oil_after are exact-calendar-date checkpoints, same methodology as A5 in sql/06_analysis.sql - not interpolated or smoothed.';
+    'One row per shutdown episode ("gaps and islands" reconstruction from core.daily_production), across all wellbores. restart_date is NULL for an episode still open at the end of recorded history (censored, not zero-length). elapsed_span_days is calendar time between shutdown and restart (NULL when censored); observed_inactive_days is only days actually recorded with on_stream_hrs = 0 in that span ("so far" for a censored episode); unknown_days = elapsed_span_days - observed_inactive_days (NULL when censored) is time inside the span with no confirming zero-hours reading (a missing date or a NULL-hours day) - not asserted downtime. oil_before/oil_after are exact-calendar-date checkpoints, same methodology as A5 in sql/06_analysis.sql - not interpolated or smoothed.';
 
 
 -- -----------------------------------------------------------------------------

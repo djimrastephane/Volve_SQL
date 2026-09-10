@@ -47,10 +47,15 @@ information for real engineering analysis, not just for audit queries.
 
 A second page, `views/ask_the_data.py`, turns a free-text question into SQL
 against `analytics.*` using a local LLM served by Ollama - no external API
-call, no data or schema leaves this machine. The model's only job is
-producing SQL; the displayed answer is always the literal query result,
-never an LLM paraphrase of it, and the generated SQL is always shown
-("View SQL").
+call, no data or schema leaves this machine *as long as `OLLAMA_HOST` stays
+at its default (`http://localhost:11434`)*. That variable is configurable
+(`nlsql.py`) for anyone who genuinely needs a remote Ollama instance; if you
+set it, the schema card and every question typed into this page go to
+whatever host it names, and that host should be private, not
+internet-exposed - this claim is not enforced in code, only true by
+default. The model's only job is producing SQL; the displayed answer is
+always the literal query result, never an LLM paraphrase of it, and the
+generated SQL is always shown ("View SQL").
 
 Model choice (`OLLAMA_MODEL` in `nlsql.py`, default `qwen2.5-coder:14b`)
 was picked from a benchmark, not by assumption - see `bench_nlsql.py` and

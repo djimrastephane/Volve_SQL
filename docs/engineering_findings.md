@@ -104,12 +104,23 @@ groups consecutive same-state days into one episode), with offline duration
 and oil production immediately before/after each shutdown. Surfaced on the
 dashboard's Well Performance page.
 
-**A12 — Does a new well coming online affect field oil rate?**
-*SQL:* before/after average `bore_oil_vol` window around each wellbore's
-first-production date, joined against `vw_field_monthly_summary`.
-*Finding:* Field oil rate rises measurably after new wellbores start up —
-e.g. around 15/9-F-4's 2008-04 entry, field average moves from roughly
-66,226 to roughly 145,182 Sm³/day before vs. after.
+**A12 — Does a new well coming online affect field monthly oil volume?**
+*SQL:* before/after average of `vw_field_monthly_summary.oil_volume`
+(Sm³ **per calendar month**, not a daily rate) over the 3 months preceding
+and following each wellbore's entry month, joined against that view.
+*Finding:* Field monthly oil volume rises measurably after new wellbores
+start up — e.g. around 15/9-F-4's 2008-04 entry, the field's mean monthly
+oil volume moves from roughly 66,226 to roughly 145,182 **Sm³/month**
+(previously and incorrectly reported here as Sm³/**day** — a ~30x unit
+error; corrected 2026-09-09). 15/9-F-4 itself is a pure water injector
+(`entry_reason = 'first_water_injection'` in the corrected query output,
+`total_oil IS NULL` throughout its record) — the rise coincides with it
+entering service, not with it becoming "a new producer"; its own
+contribution to the field oil total is exactly zero throughout.
 *Interpretation:* a directional, not strictly causal, read — other wells'
-own trajectories move over the same window — but the direction is
-consistent with what bringing a new producer online should do.
+own trajectories move over the same window, and `entry_reason` should
+always be read alongside the before/after figures so an injector's entry
+is never mistaken for a producer's. `months_with_data_before/after` in
+the corrected query output report how many of the 3 surrounding months
+actually had recorded oil volume — `AVG()` silently ignores a NULL month
+inside that window, so this is checked explicitly rather than assumed.

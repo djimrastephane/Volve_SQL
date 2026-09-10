@@ -113,23 +113,27 @@ with producers_tab:
     st.caption(
         "Oil production indexed to days since each well's first positive oil day, "
         "as % of that well's own peak daily oil  -  generalizes A3/A4 for shape comparison. "
-        "30-day rolling average, not the raw daily series: this chart's job is comparing "
-        "decline *shape* across wells, and raw daily values swing enough day-to-day (shut-in "
-        "days, choke changes, restart ramp-up) that overlapping raw lines were unreadable. "
-        "The exact-date, no-smoothing values this deliberately trades away are on Well "
-        "Performance's per-well Production history chart."
+        "Trailing 30-CALENDAR-day average, not the raw daily series: this chart's job is "
+        "comparing decline *shape* across wells, and raw daily values swing enough day-to-day "
+        "(shut-in days, choke changes, restart ramp-up) that overlapping raw lines were "
+        "unreadable. The window is computed on real elapsed time (PostgreSQL RANGE, not a "
+        "30-row/30-observation average), so a gap in recorded days doesn't silently stretch "
+        "the window across more calendar time than its label claims - hover a point for how "
+        "many actual readings fed it; a thin count means less confidence in that point, not a "
+        "different definition of \"30 days\". The exact-date, no-smoothing values this "
+        "deliberately trades away are on Well Performance's per-well Production history chart."
     )
     profiles = q.normalized_profiles(selected_codes)
     if not profiles.empty:
-        profiles = profiles.sort_values(["wellbore_name", "days_since_first_oil"]).copy()
-        profiles["pct_of_peak_smoothed"] = (
-            profiles.groupby("wellbore_name")["pct_of_peak"]
-            .transform(lambda s: s.rolling(30, min_periods=1).mean())
+        fig2 = px.line(
+            profiles, x="days_since_first_oil", y="pct_of_peak_smoothed_30d", color="wellbore_name",
+            color_discrete_map=well_color_map, custom_data=["window_observations"],
         )
-        fig2 = px.line(profiles, x="days_since_first_oil", y="pct_of_peak_smoothed", color="wellbore_name",
-                        color_discrete_map=well_color_map)
+        fig2.update_traces(
+            hovertemplate="%{y:.1f}% of peak<br>%{customdata[0]} reading(s) in this 30-day window<extra></extra>"
+        )
         fig2.update_layout(
-            yaxis_title="% of peak daily oil (30-day avg)", xaxis_title="Days since first oil",
+            yaxis_title="% of peak daily oil (trailing 30-calendar-day avg)", xaxis_title="Days since first oil",
             legend_title_text="Well",
         )
         st.plotly_chart(fig2, width="stretch")

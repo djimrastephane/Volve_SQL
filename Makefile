@@ -20,17 +20,20 @@
 # this project's actual dev environment (see sql/07_app_role.sql's own
 # comment) - so, like every psql command in the README, none of these
 # recipes pass -U. No local PostgreSQL install? `make docker-up` runs one
-# in Docker instead (see docker-compose.yml) - export PGHOST=localhost
-# PGUSER=postgres first (that file's own comment explains why both are
-# needed), then every target below works unchanged.
+# in Docker instead (see docker-compose.yml) - export PGHOST=127.0.0.1
+# PGUSER=postgres VOLVE_PG_PASSWORD=... PGPASSWORD=$$VOLVE_PG_PASSWORD
+# first (that file's own comment explains why), then every target below
+# works unchanged, plus one extra one-time step for that container
+# specifically: `make docker-set-app-password` (see that target).
 
-.PHONY: help setup load check app load-fixture clean-fixture-db docker-up docker-down
+.PHONY: help setup load check app load-fixture clean-fixture-db docker-up docker-down docker-set-app-password
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python3
 DB_NAME ?= volve_analytics
 SCHEMA_FILES := sql/01_create_schemas.sql sql/02_create_tables.sql \
-                sql/03_create_indexes.sql sql/05_views.sql sql/07_app_role.sql
+                sql/03_create_indexes.sql sql/05_views.sql \
+                sql/08_load_provenance.sql sql/07_app_role.sql
 
 help:
 	@echo "make setup  - venv + pip install + create/apply schema to $(DB_NAME)"
@@ -46,8 +49,12 @@ help:
 	@echo "                        load-fixture can start clean"
 	@echo ""
 	@echo "make docker-up   - run PostgreSQL 17 in Docker instead of installing it"
-	@echo "                   (see docker-compose.yml for the export PGHOST=... /"
-	@echo "                   PGUSER=... this needs before the targets above)"
+	@echo "                   (see docker-compose.yml - needs VOLVE_PG_PASSWORD set"
+	@echo "                   first, and PGHOST/PGUSER/PGPASSWORD exported after)"
+	@echo "make docker-set-app-password - one-time: give volve_app a password"
+	@echo "                   (needed only for the Docker container, after 'make"
+	@echo "                   setup' - see docker-compose.yml. Needs"
+	@echo "                   VOLVE_APP_DB_PASSWORD set first)"
 	@echo "make docker-down - stop it (data persists in a named volume)"
 	@echo ""
 	@echo "Override the database name with DB_NAME=whatever"
@@ -84,21 +91,42 @@ load: $(VENV)/bin/pip
 # .github/workflows/ci.yml's loader-fixture-test job uses. Lets `make
 # check`'s pytest suite exercise its content-dependent tests, and `make
 # app` show a working (if tiny) dashboard, without needing the real data.
+# VOLVE_FIXTURE_LOAD=1 makes src/load_postgres.py refuse to truncate
+# core/raw unless every wellbore code already there is one this fixture
+# itself loads (90001/90002) or the table is empty - see
+# _refuse_unless_fixture_target_is_disposable() in that file. Protects
+# against exactly the accident a 2026-09-09 security review flagged:
+# running this target against DB_NAME pointed at a populated real-data
+# database silently replacing its contents with 20 fixture rows.
 load-fixture: $(VENV)/bin/pip
 	$(PYTHON) tests/fixtures/generate_sample_workbook.py /tmp/volve_sample_workbook.xlsx
 	VOLVE_DB_NAME=$(DB_NAME) \
 	VOLVE_WORKBOOK_PATH=/tmp/volve_sample_workbook.xlsx \
 	VOLVE_EXPECTED_DAILY_ROWS=20 \
 	VOLVE_EXPECTED_WELLBORE_COUNT=2 \
+	VOLVE_FIXTURE_LOAD=1 \
 	$(PYTHON) src/load_postgres.py
 
 # load-fixture's truncate-and-reload only touches core/raw, not a full
 # drop - this is only needed if you loaded the real data first and want
 # to switch back to the fixture (load-fixture alone reproduces the same
 # fixture state every time otherwise, per src/load_postgres.py's own
-# idempotency guarantee).
+# idempotency guarantee). Same fixture-marker guard as load-fixture,
+# applied here directly in SQL since this target never runs the Python
+# loader: refuses to truncate if core.wellbore holds any code the fixture
+# didn't put there.
 clean-fixture-db:
 	psql -d $(DB_NAME) -v ON_ERROR_STOP=1 -c \
+		"DO \$$\$$ \
+		DECLARE unexpected int; \
+		BEGIN \
+			SELECT count(*) INTO unexpected FROM core.wellbore \
+				WHERE npd_well_bore_code NOT IN (90001, 90002); \
+			IF unexpected > 0 THEN \
+				RAISE EXCEPTION 'Refusing to clean: % wellbore(s) in core.wellbore are not this fixture''s own (90001/90002) - this looks like a real or non-fixture dataset', unexpected; \
+			END IF; \
+		END \$$\$$;" \
+	&& psql -d $(DB_NAME) -v ON_ERROR_STOP=1 -c \
 		"TRUNCATE TABLE core.daily_production, core.monthly_reference, core.wellbore, raw.daily_production_source, raw.monthly_production_source RESTART IDENTITY"
 
 check: $(VENV)/bin/pip
@@ -131,10 +159,26 @@ docker-up:
 	fi
 	docker compose up -d
 	@echo ""
-	@echo "PostgreSQL 17 running in Docker. Before make setup/load/check/app:"
-	@echo "  export PGHOST=localhost PGUSER=postgres"
+	@echo "PostgreSQL 17 running in Docker (127.0.0.1 only, password auth)."
+	@echo "Before make setup/load/check/app:"
+	@echo "  export PGHOST=127.0.0.1 PGUSER=postgres PGPASSWORD=\$$VOLVE_PG_PASSWORD"
 	@echo "  (add PGPORT=5433 too if you started this with VOLVE_PG_PORT=5433 -"
 	@echo "  see docker-compose.yml if port 5432 is already taken locally)"
+	@echo "Then, once: make docker-set-app-password (needs VOLVE_APP_DB_PASSWORD set)"
+
+# volve_app is created passwordless by sql/07_app_role.sql (correct for
+# native Homebrew trust auth - see that file's comment) but this
+# container requires a password for every role, including volve_app, on
+# every connection (docker-compose.yml: POSTGRES_HOST_AUTH_METHOD:
+# scram-sha-256). Run once, after `make setup`, only when using Docker.
+docker-set-app-password: $(VENV)/bin/pip
+	@test -n "$(VOLVE_APP_DB_PASSWORD)" || \
+		{ echo "Set VOLVE_APP_DB_PASSWORD first (a local password for the volve_app role)"; exit 1; }
+	psql -d $(DB_NAME) -v ON_ERROR_STOP=1 -c \
+		"ALTER ROLE volve_app WITH PASSWORD '$(VOLVE_APP_DB_PASSWORD)'"
+	@echo "volve_app password set. Add to your environment before make check/app:"
+	@echo "  export VOLVE_APP_DB_PASSWORD=... (app/db.py and tests/conftest.py read"
+	@echo "  it as PGPASSWORD would not apply - see app/db.py's own comment)"
 
 docker-down:
 	docker compose down

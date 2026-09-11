@@ -23,15 +23,20 @@ the fast path into it, not a replacement for it.
   real, documented source anomaly, not a defect to hide).
 - **Security-mindedness, not just a working feature.** The dashboard connects
   as a least-privilege role (`sql/07_app_role.sql`) with zero grant on
-  `core`/`raw`, enforced by PostgreSQL itself, not application code. "Ask the
+  `core`/`raw`, enforced by PostgreSQL itself, not application code -
+  `tests/test_privileges.py` proves this by connecting as that role directly
+  and asserting PostgreSQL refuses core/raw reads and every write. "Ask the
   Data" (free-text → SQL via a local LLM) validates every generated statement
-  with a real SQL parser (`app/nlsql.py`, `sqlglot`) — exact view allowlist,
-  a full-tree walk that catches even a write hidden inside a CTE, all before
-  that same role/grant boundary would catch it anyway. Defense in depth,
-  each layer independent of the others.
+  with a real SQL parser (`app/nlsql.py`, `sqlglot`) — exact view allowlist
+  resolved per SQL scope (not fooled by a same-named CTE nested somewhere
+  else in the tree), an explicit function allowlist (not a blocklist), a
+  full-tree walk that catches even a write hidden inside a CTE — then runs on
+  a connection that's opened fresh, row/byte-bounded during fetch, and closed
+  outright after one use, all before that same role/grant boundary would
+  catch it anyway. Defense in depth, each layer independent of the others.
 - **Reproducibility.** `.github/workflows/ci.yml` runs on every push: SQL
   lint, a schema-only dry run, a synthetic-data end-to-end load through the
-  real loader, and 76 pytest tests — genuinely green (verified against a
+  real loader, and 149 pytest tests — genuinely green (verified against a
   from-scratch, password-auth-required Postgres cluster, not just a
   developer machine that already had convenient defaults sitting around).
 - **Product judgment on the dashboard.** Five pages, each answering a
@@ -50,16 +55,19 @@ the fast path into it, not a replacement for it.
 No local PostgreSQL install? One extra step first:
 
 ```bash
+export VOLVE_PG_PASSWORD=<any local password>
 make docker-up                        # PostgreSQL 17 in Docker (docker-compose.yml)
-export PGHOST=localhost PGUSER=postgres
+export PGHOST=127.0.0.1 PGUSER=postgres PGPASSWORD=$VOLVE_PG_PASSWORD
 ```
 
 Then, either way:
 
 ```bash
 make setup         # venv + deps + schema
+# Docker only, once: export VOLVE_APP_DB_PASSWORD=<another local password>
+#                    make docker-set-app-password
 make load-fixture   # loads a tiny synthetic 2-well workbook, not the real data
-make check          # sqlfluff + pytest (76 tests)
+make check          # sqlfluff + pytest (149 tests)
 make app            # http://localhost:8501
 ```
 

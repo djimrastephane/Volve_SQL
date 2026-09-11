@@ -12,3 +12,8 @@ data/raw/*.xlsx
 
 # Streamlit local config/secrets (e.g. a future NL-to-SQL API key)
 .streamlit/secrets.toml
+
+# Local environment/credential files (e.g. VOLVE_PG_PASSWORD for
+# docker-compose.yml, VOLVE_APP_DB_PASSWORD) - never committed
+.env
+.env.*

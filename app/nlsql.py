@@ -15,17 +15,30 @@ Defense in depth before any generated SQL is executed:
      SELECT, contain no write/DDL node anywhere in the tree - not just at
      the root, since PostgreSQL allows a data-modifying CTE
      (`WITH x AS (DELETE FROM ... RETURNING *) SELECT * FROM x`) whose
-     outer shape is a SELECT - and reference only the exact 5 analytics
-     views in ALLOWED_VIEWS, nothing else. See _validate_sql().
-  2. Executed on a connection as volve_app (sql/07_app_role.sql), which has
-     no grant on core or raw regardless of what the SQL says.
-  3. That connection is opened read-only and capped with a 10s
-     statement_timeout (app/db.py).
-None of these three layers depends on the other two being correct.
+     outer shape is a SELECT - reference only the exact 5 analytics views
+     in ALLOWED_VIEWS (resolved per SQL scope, not by a flat "any CTE name
+     anywhere" walk - see _table_refs()), call only functions on the
+     explicit allowlist (see _validate_functions()), and contain no
+     SELECT INTO / FOR UPDATE / FOR SHARE clause. See _validate_sql().
+     This is a narrow allowlisted grammar, not a growing blocklist: an
+     unrecognized function, construct, or reference is refused by
+     default, not enumerated by name.
+  2. Executed on app/db.py's run_generated_query(), a connection isolated
+     from the one dashboard pages use for their own fixed queries (see
+     that function's docstring) - as volve_app (sql/07_app_role.sql),
+     which has no grant on core or raw regardless of what the SQL says,
+     opened read-only, capped with a short statement_timeout, and
+     discarded (not returned to a shared cache) after every call so a
+     session-level change or cancellation from one request can never
+     reach another.
+  3. Result rows and bytes are capped during fetch, before full
+     materialization (see run_generated_query()'s row/byte budget).
+None of these layers depends on the other two being correct.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 
@@ -33,11 +46,29 @@ import requests
 import sqlglot
 import sqlglot.errors
 from sqlglot import exp
+from sqlglot.optimizer.scope import build_scope
 
-from db import run_query
+from db import run_generated_query
+
+# Structured, not indiscriminate: logs the model, latency, and a rejection
+# CATEGORY (e.g. "not on the allowed function list") - never the user's
+# free-text question, and never the generated SQL text itself (that stays
+# in the UI's own "View SQL" transparency feature for the user who asked
+# it; logging it server-side by default would be a second copy of
+# potentially sensitive generated content sitting in ops logs for no
+# operational benefit this category-level signal doesn't already give).
+logger = logging.getLogger("volve.nlsql")
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:14b")
+
+# Finding 4/14 of the 2026-09-09 security review: neither the question
+# nor the model's raw output had an explicit size bound, and the model
+# response envelope was read (resp.json()["response"]) with no guard for
+# a non-JSON body, a missing/renamed key, or a non-string value - any of
+# which crashed the page instead of failing as an ordinary NLSQLError.
+MAX_QUESTION_CHARS = int(os.environ.get("VOLVE_ASK_MAX_QUESTION_CHARS", "1000"))
+MAX_MODEL_OUTPUT_CHARS = int(os.environ.get("VOLVE_ASK_MAX_OUTPUT_CHARS", "20000"))
 
 SCHEMA_CARD = """\
 analytics.vw_daily_well_performance
@@ -194,6 +225,26 @@ _WRITE_OR_UNKNOWN_NODES = (
     exp.Grant, exp.Command, exp.Execute, exp.Cache, exp.Set,
 )
 
+# Explicit function allowlist, not a blocklist of known-bad names -
+# anything not listed here is refused by default, including any future
+# PostgreSQL function this project has never heard of. sqlglot gives most
+# built-in functions their own node class (checked here by type()); a
+# handful of functions this schema legitimately needs (MAKE_DATE) have no
+# dedicated class in sqlglot and parse as exp.Anonymous instead, so those
+# are allowed by literal lowercased name via _ALLOWED_ANONYMOUS_FUNCTIONS -
+# every OTHER exp.Anonymous call (set_config, pg_advisory_lock,
+# query_to_xml, pg_sleep, dblink, ... - anything sqlglot doesn't recognize
+# as a specific built-in) is refused. This is exactly the "session
+# configuration changes, advisory locks, SQL embedded in a string" bypass
+# class from the security review: none of those functions appear here, so
+# none of them validate, regardless of what string argument they're given.
+_ALLOWED_FUNCTIONS = (
+    exp.Count, exp.Sum, exp.Avg, exp.Min, exp.Max, exp.Round, exp.Abs,
+    exp.Extract, exp.TimestampTrunc, exp.Coalesce, exp.Nullif,
+    exp.RowNumber, exp.Rank, exp.DenseRank, exp.Lag, exp.Lead,
+)
+_ALLOWED_ANONYMOUS_FUNCTIONS = {"make_date"}
+
 
 class NLSQLError(Exception):
     """
@@ -229,19 +280,72 @@ def _clean_sql(raw: str) -> str:
 
 def _table_refs(tree: exp.Expression) -> set[str]:
     """Every schema-qualified table/view this statement actually reads
-    from, excluding references that resolve to a CTE defined in the same
-    statement rather than a real external object. Shared by
-    _validate_sql() (checked against ALLOWED_VIEWS) and source_views()
-    (just displayed to the user) so both agree on what "referenced" means."""
-    cte_names = {cte.alias for cte in tree.find_all(exp.CTE)}
+    from, resolved per SQL SCOPE via sqlglot's own resolver
+    (sqlglot.optimizer.scope.build_scope) rather than a flat "collect
+    every CTE alias anywhere in the tree" walk. The flat version cannot
+    tell a name that is genuinely in scope (an enclosing CTE, a sibling
+    CTE defined earlier in the same WITH list, the query's own alias)
+    apart from a same-named CTE that only exists in an unrelated,
+    non-enclosing scope - e.g. one nested inside a DIFFERENT CTE
+    (`WITH x AS (WITH pg_roles AS (...) SELECT 1) SELECT * FROM pg_roles`,
+    where the outer pg_roles reference is not the inner CTE - PostgreSQL
+    itself resolves it as the real pg_catalog table). build_scope's
+    per-scope `sources` mapping already makes exactly this distinction: a
+    source is either a Scope (CTE/subquery/derived table actually in
+    scope here) or a Table (an unresolved name that PostgreSQL would look
+    up as a real relation) - only the latter is a reference this
+    function reports. A forward reference to a CTE defined later in the
+    same WITH list - illegal in standard (non-RECURSIVE) SQL - resolves
+    the same way: as an unresolved Table, which is exactly right, since
+    real PostgreSQL would refuse it as an undefined relation too, not
+    silently treat it as the same-named CTE.
+
+    Shared by _validate_sql() (checked against ALLOWED_VIEWS) and
+    source_views() (just displayed to the user) so both agree on what
+    "referenced" means.
+    """
+    try:
+        root = build_scope(tree)
+    except Exception:
+        # A tree build_scope can't analyze (e.g. a construct outside what
+        # its optimizer models) is not proof of safety - refuse closed by
+        # reporting it as an unresolvable reference, same as "doesn't
+        # parse" is treated elsewhere in this module.
+        return {"(unresolvable - refused)"}
+    if root is None:
+        return set()
     refs = set()
-    for table in tree.find_all(exp.Table):
-        if not table.db and table.name in cte_names:
-            continue
-        qualified = f"{table.db}.{table.name}" if table.db else table.name
-        if qualified:
-            refs.add(qualified)
+    for scope in root.traverse():
+        for source in scope.sources.values():
+            if isinstance(source, exp.Table):
+                qualified = f"{source.db}.{source.name}" if source.db else source.name
+                if qualified:
+                    refs.add(qualified)
     return refs
+
+
+def _validate_functions(tree: exp.Expression) -> None:
+    for func in tree.find_all(exp.Func):
+        if isinstance(func, exp.Connector):
+            # sqlglot models AND/OR (exp.And/exp.Or) as exp.Func subclasses
+            # too, since they're technically n-ary callables in its type
+            # hierarchy - they are boolean connectives, not a callable
+            # server-side function name, so they are not part of what this
+            # allowlist is restricting.
+            continue
+        if isinstance(func, exp.Anonymous):
+            name = func.this if isinstance(func.this, str) else str(func.this)
+            if name.lower() in _ALLOWED_ANONYMOUS_FUNCTIONS:
+                continue
+            raise NLSQLError(
+                f'Generated statement calls "{name}(...)", which is not on the '
+                f"allowed function list - refused to run it."
+            )
+        if not isinstance(func, _ALLOWED_FUNCTIONS):
+            raise NLSQLError(
+                f'Generated statement calls "{func.sql_name()}(...)", which is not on the '
+                f"allowed function list - refused to run it."
+            )
 
 
 def _validate_sql(sql: str) -> None:
@@ -272,6 +376,22 @@ def _validate_sql(sql: str) -> None:
             "inside a CTE) - refused to run it."
         )
 
+    # SELECT INTO creates a table - a write disguised as a SELECT, and not
+    # caught by _WRITE_OR_UNKNOWN_NODES since sqlglot models it as a plain
+    # exp.Select with an `into` clause, not a DML/DDL node. FOR UPDATE/FOR
+    # SHARE take row locks this read-only role has no business holding -
+    # the connection is already opened readonly (app/db.py), so PostgreSQL
+    # would refuse these too, but rejecting them here means that guarantee
+    # doesn't depend on the connection setting being correct.
+    if tree.args.get("into") is not None:
+        raise NLSQLError(
+            "Generated statement uses SELECT INTO, which creates a table - refused to run it."
+        )
+    if tree.args.get("locks"):
+        raise NLSQLError(
+            "Generated statement requests a row lock (FOR UPDATE/FOR SHARE) - refused to run it."
+        )
+
     for qualified in _table_refs(tree):
         if qualified not in ALLOWED_VIEWS:
             raise NLSQLError(
@@ -279,10 +399,71 @@ def _validate_sql(sql: str) -> None:
                 f"allowed analytics views - refused to run it."
             )
 
+    _validate_functions(tree)
+
+
+_ERROR_CATEGORIES = (
+    ("empty", "Question is empty"),
+    ("question_too_long", "over the"),
+    ("ollama_unreachable", "Could not reach Ollama"),
+    ("malformed_response_envelope", "not valid JSON"),
+    ("malformed_response_envelope", '"response" field'),
+    ("output_too_long", "character limit"),
+    ("unparseable_sql", "does not parse as valid SQL"),
+    ("empty_generated_query", "returned an empty query"),
+    ("multiple_statements", "exactly one SQL statement"),
+    ("not_select", "not a SELECT/WITH query"),
+    ("write_or_ddl", "write/DDL operation"),
+    ("select_into", "SELECT INTO"),
+    ("row_lock", "row lock"),
+    ("disallowed_reference", "not one of the allowed analytics views"),
+    ("disallowed_function", "not on the allowed function list"),
+    ("execution_failed", "Query failed:"),
+)
+
+
+def _categorize_error(message: str) -> str:
+    """Coarse, fixed category derived from the (also fixed, English)
+    exception message - not the message itself, so logs stay useful for
+    triage ("how often is category X happening") without needing every
+    raise site in this module to also thread a category code through
+    NLSQLError's constructor."""
+    for category, needle in _ERROR_CATEGORIES:
+        if needle in message:
+            return category
+    return "other"
+
 
 def generate_sql(question: str, model: str = OLLAMA_MODEL, timeout: int = 90) -> str:
     """model is overridable so app/bench_nlsql.py can compare candidates with
     an identical prompt/schema/few-shot set - the only variable being tested."""
+    import time
+    t0 = time.monotonic()
+    try:
+        sql = _generate_sql_inner(question, model, timeout)
+    except NLSQLError as exc:
+        # Category only (the class of failure), never the question or
+        # generated SQL text - see this module's logger comment.
+        logger.info(
+            "generate_sql model=%s outcome=rejected category=%s duration_ms=%d",
+            model, _categorize_error(str(exc)), int((time.monotonic() - t0) * 1000),
+        )
+        raise
+    logger.info(
+        "generate_sql model=%s outcome=validated duration_ms=%d",
+        model, int((time.monotonic() - t0) * 1000),
+    )
+    return sql
+
+
+def _generate_sql_inner(question: str, model: str, timeout: int) -> str:
+    if not question or not question.strip():
+        raise NLSQLError("Question is empty.")
+    if len(question) > MAX_QUESTION_CHARS:
+        raise NLSQLError(
+            f"Question is {len(question):,} characters, over the {MAX_QUESTION_CHARS:,}-character limit."
+        )
+
     prompt = _build_prompt(question)
     try:
         resp = requests.post(
@@ -303,7 +484,28 @@ def generate_sql(question: str, model: str = OLLAMA_MODEL, timeout: int = 90) ->
             f"Is `ollama serve` running? ({exc})"
         ) from exc
 
-    sql = _clean_sql(resp.json()["response"])
+    # The response envelope itself is untrusted input, same as the SQL it
+    # carries: a non-JSON body, a missing/renamed "response" key, or a
+    # non-string value must fail as an ordinary NLSQLError, not an
+    # unhandled exception the calling page has to know to catch.
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        raise NLSQLError(f"Ollama returned a response that was not valid JSON: {exc}") from exc
+
+    raw_response = payload.get("response") if isinstance(payload, dict) else None
+    if not isinstance(raw_response, str):
+        raise NLSQLError(
+            "Ollama's response envelope did not contain a text \"response\" field "
+            f"(got {type(raw_response).__name__})."
+        )
+    if len(raw_response) > MAX_MODEL_OUTPUT_CHARS:
+        raise NLSQLError(
+            f"Model output is {len(raw_response):,} characters, over the "
+            f"{MAX_MODEL_OUTPUT_CHARS:,}-character limit - refused."
+        )
+
+    sql = _clean_sql(raw_response)
     try:
         _validate_sql(sql)
     except NLSQLError as exc:
@@ -331,7 +533,7 @@ def ask(question: str):
     """
     sql = generate_sql(question)
     try:
-        df = run_query(sql)
+        df = run_generated_query(sql)
     except Exception as exc:
         raise NLSQLError(f"Query failed: {exc}", sql=sql) from exc
     return sql, df

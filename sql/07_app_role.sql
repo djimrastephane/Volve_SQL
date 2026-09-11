@@ -7,12 +7,14 @@
 -- role - the app's "analytics-schema-only" access is a database-enforced
 -- fact, not a convention the application code has to honour on its own.
 --
--- Local Homebrew PostgreSQL here uses "trust" auth for local/loopback
--- connections (pg_hba.conf), so this role needs no password to be usable in
--- this project's environment. In any deployment with real network exposure,
--- this role should instead get a generated password and a scram-sha-256
--- pg_hba entry - out of scope for a local portfolio project, but worth
--- stating explicitly rather than silently relying on trust auth forever.
+-- Local native Homebrew PostgreSQL uses "trust" auth for local/loopback
+-- connections (pg_hba.conf), so this role needs no password there. That is
+-- NOT true of docker-compose.yml's containerized Postgres, which requires
+-- scram-sha-256 for every role on every connection (see that file's
+-- header comment) - `make docker-set-app-password` sets one for this role
+-- after this script has created it. Any deployment with real network
+-- exposure needs the same: a generated password, delivered out of band
+-- (not committed here), and a scram-sha-256 pg_hba entry.
 --
 -- Idempotent: safe to re-run.
 -- =============================================================================
@@ -28,7 +30,20 @@ $$;
 COMMENT ON ROLE volve_app IS
     'Least-privilege role for the Streamlit dashboard (app/). SELECT on analytics only - no access to core or raw.';
 
-GRANT CONNECT ON DATABASE volve_analytics TO volve_app;
+-- Grants against whatever database this script is actually running
+-- against (current_database()), not a hardcoded 'volve_analytics' -
+-- Makefile/src/load_postgres.py both support DB_NAME/VOLVE_DB_NAME
+-- overrides, and a hardcoded name here silently failed (wrong database)
+-- or errored (nonexistent database) for anyone using one. quote_ident()
+-- makes this safe for any valid identifier, including one that needs
+-- quoting - format('%I', ...) alone would not be enough if the name
+-- also needed dollar-quoting protection inside the DO block, so the
+-- GRANT is built and executed as dynamic SQL via EXECUTE.
+DO $$
+BEGIN
+    EXECUTE format('GRANT CONNECT ON DATABASE %I TO volve_app', current_database());
+END
+$$;
 
 GRANT USAGE ON SCHEMA analytics TO volve_app;
 GRANT SELECT ON ALL TABLES IN SCHEMA analytics TO volve_app;

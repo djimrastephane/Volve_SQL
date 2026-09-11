@@ -15,13 +15,23 @@
 --      populations documented from the source - unchanged, not silently
 --      dropped or altered by a later change to the loader?
 --
--- Three statuses, matching the notebook's PASS/FAIL/REVIEW convention:
+-- Four statuses, matching the notebook's PASS/FAIL/REVIEW convention plus
+-- one added for dataset-awareness (see below):
 --   PASS    deterministic expectation satisfied
 --   FAIL    database/source integrity rule violated, OR a documented DQ
 --           population no longer matches its recorded size (drift - the
 --           loader or source changed something worth investigating)
 --   REVIEW  a known, possibly-legitimate industrial exception, confirmed
 --           still present exactly as documented
+--   SKIP    a fixed-snapshot check (row counts, known DQ population
+--           sizes - categories 'Row counts' and 'Known DQ issues') that
+--           does not apply to the currently loaded dataset, because it
+--           is not the real 15,634-row snapshot these checks encode
+--           expected values for (e.g. the synthetic test fixture). Not
+--           counted as PASS (that would claim it was actually verified)
+--           or FAIL (a different dataset not matching the real
+--           snapshot's exact counts is not itself a defect) - see the
+--           snapshot_check CTE at the end of this file.
 --
 -- Not every notebook check is ported - only what matters for database
 -- integrity, repeatability, or a known DQ exception. Sections 15-20 of the
@@ -29,7 +39,9 @@
 -- summaries) are not re-tested here; they produced no FAIL-worthy or
 -- DQ-tracked findings of their own.
 --
--- Read-only. No INSERT/UPDATE/DELETE anywhere in this file.
+-- Read-only. No INSERT/UPDATE/DELETE anywhere in this file (the DO block
+-- at the end RAISEs on a FAIL row - a control-flow signal for whatever
+-- ran this script, not a write).
 -- =============================================================================
 
 DROP TABLE IF EXISTS pg_temp.quality_check_results;
@@ -364,35 +376,63 @@ qc_021 AS (
         CASE WHEN count(*) = 0 THEN 'PASS' ELSE 'FAIL' END
     FROM core.daily_production
     WHERE avg_choke_uom IS NOT NULL AND avg_choke_uom != '%'
-)
+),
 
-SELECT * FROM qc_001
-UNION ALL SELECT * FROM qc_002
-UNION ALL SELECT * FROM qc_003
-UNION ALL SELECT * FROM qc_004
-UNION ALL SELECT * FROM qc_005
-UNION ALL SELECT * FROM qc_006
-UNION ALL SELECT * FROM qc_007
-UNION ALL SELECT * FROM qc_008
-UNION ALL SELECT * FROM qc_009
-UNION ALL SELECT * FROM qc_010
-UNION ALL SELECT * FROM qc_011
-UNION ALL SELECT * FROM qc_012
-UNION ALL SELECT * FROM qc_013
-UNION ALL SELECT * FROM qc_014
-UNION ALL SELECT * FROM qc_015
-UNION ALL SELECT * FROM qc_016
-UNION ALL SELECT * FROM dq_001
-UNION ALL SELECT * FROM dq_002
-UNION ALL SELECT * FROM dq_003
-UNION ALL SELECT * FROM dq_004
-UNION ALL SELECT * FROM dq_005
-UNION ALL SELECT * FROM dq_006
-UNION ALL SELECT * FROM qc_017
-UNION ALL SELECT * FROM qc_018
-UNION ALL SELECT * FROM qc_019
-UNION ALL SELECT * FROM qc_020
-UNION ALL SELECT * FROM qc_021;
+all_checks AS (
+    SELECT * FROM qc_001
+    UNION ALL SELECT * FROM qc_002
+    UNION ALL SELECT * FROM qc_003
+    UNION ALL SELECT * FROM qc_004
+    UNION ALL SELECT * FROM qc_005
+    UNION ALL SELECT * FROM qc_006
+    UNION ALL SELECT * FROM qc_007
+    UNION ALL SELECT * FROM qc_008
+    UNION ALL SELECT * FROM qc_009
+    UNION ALL SELECT * FROM qc_010
+    UNION ALL SELECT * FROM qc_011
+    UNION ALL SELECT * FROM qc_012
+    UNION ALL SELECT * FROM qc_013
+    UNION ALL SELECT * FROM qc_014
+    UNION ALL SELECT * FROM qc_015
+    UNION ALL SELECT * FROM qc_016
+    UNION ALL SELECT * FROM dq_001
+    UNION ALL SELECT * FROM dq_002
+    UNION ALL SELECT * FROM dq_003
+    UNION ALL SELECT * FROM dq_004
+    UNION ALL SELECT * FROM dq_005
+    UNION ALL SELECT * FROM dq_006
+    UNION ALL SELECT * FROM qc_017
+    UNION ALL SELECT * FROM qc_018
+    UNION ALL SELECT * FROM qc_019
+    UNION ALL SELECT * FROM qc_020
+    UNION ALL SELECT * FROM qc_021
+),
+-- 'Row counts' (QC-001..005) and 'Known DQ issues' (DQ-001..006) encode
+-- the REAL 15,634-row snapshot's exact expected figures (see each
+-- check's own comment) - not generic invariants, and never meant to
+-- pass against a different dataset (e.g. tests/fixtures/
+-- generate_sample_workbook.py's synthetic fixture, or any future real
+-- reload with a different row count). Finding 5/13 of the 2026-09-09
+-- security review: turning every FAIL into a hard script error (below)
+-- would otherwise make this script fail on ANY dataset that isn't
+-- exactly the current real snapshot, including the fixture CI loads
+-- through the real pipeline - which is not what a fixed-snapshot check
+-- failing to match a DIFFERENT dataset means. Structural checks (grain,
+-- FK coverage, identifier consistency, reconciliation,
+-- constraint-sensitive) carry no such assumption and always enforce.
+snapshot_check AS (
+    SELECT (SELECT count(*) FROM core.daily_production) = 15634 AS is_real_snapshot
+)
+SELECT
+    sort_order, check_id, category, check_name, expected, actual,
+    CASE
+        WHEN status = 'FAIL'
+             AND category IN ('Row counts', 'Known DQ issues')
+             AND NOT (SELECT snapshot_check.is_real_snapshot FROM snapshot_check)
+        THEN 'SKIP'
+        ELSE status
+    END AS status
+FROM all_checks;
 
 
 -- =============================================================================
@@ -411,9 +451,33 @@ SELECT
     count(*) FILTER (WHERE status = 'PASS') AS pass_count,
     count(*) FILTER (WHERE status = 'REVIEW') AS review_count,
     count(*) FILTER (WHERE status = 'FAIL') AS fail_count,
+    count(*) FILTER (WHERE status = 'SKIP') AS skip_count,
     CASE
         WHEN count(*) FILTER (WHERE status = 'FAIL') > 0 THEN 'FAIL'
         WHEN count(*) FILTER (WHERE status = 'REVIEW') > 0 THEN 'PASS WITH REVIEW'
+        WHEN count(*) FILTER (WHERE status = 'SKIP') > 0 THEN 'PASS (not the real snapshot - fixed-snapshot checks skipped)'
         ELSE 'PASS'
     END AS overall_status
 FROM quality_check_results;
+
+-- Finding 5/13 of the 2026-09-09 security review: `psql -v ON_ERROR_STOP=1`
+-- only fails on an actual SQL error - a query that runs successfully and
+-- returns a row saying status = 'FAIL' does not itself stop anything,
+-- silently letting CI (and any manual run) report success regardless of
+-- what these checks actually found. This turns any FAIL row into a real
+-- SQL error, deliberately the only place in this read-only file that
+-- does - everything above remains pure reporting.
+DO $$
+DECLARE
+    failing_checks text;
+BEGIN
+    SELECT string_agg(check_id || ' (' || check_name || ')', ', ' ORDER BY sort_order)
+    INTO failing_checks
+    FROM quality_check_results
+    WHERE status = 'FAIL';
+
+    IF failing_checks IS NOT NULL THEN
+        RAISE EXCEPTION 'Quality check FAIL: %', failing_checks;
+    END IF;
+END
+$$;

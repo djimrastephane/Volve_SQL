@@ -16,25 +16,52 @@ st.caption("Whole-field performance, 7 wellbores (5 oil producers, 2 water injec
 
 lifetime = q.field_lifetime_summary()
 field = q.field_monthly()
-current_active = field.loc[field["active_wells"] > 0].iloc[-1]
+# Finding 14 of the 2026-09-09 security review: a schema-only database or
+# a snapshot with no active month at all (every value in lifetime is None -
+# see queries.field_lifetime_summary()'s own comment) crashed this page
+# outright (.iloc[-1] on an empty frame, then unguarded {:.0f} formatting
+# of None) instead of showing a no-data state.
+_active_months = field.loc[field["active_wells"] > 0]
+current_active = _active_months.iloc[-1] if not _active_months.empty else None
 
 k1, k2, k3 = st.columns(3)
-k1.metric("Cumulative oil (Sm³)", f"{lifetime['total_oil']:,.0f}")
-k2.metric("Peak oil rate (Sm³/d)", f"{lifetime['peak_oil_rate']:,.0f}", help=f"Field-wide daily total, all wells summed, on {lifetime['peak_date']}.")
-k3.metric("Peak date", str(lifetime["peak_date"]))
+k1.metric("Cumulative oil (Sm³)", f"{lifetime['total_oil']:,.0f}" if lifetime["total_oil"] is not None else "n/a")
+k2.metric(
+    "Peak oil rate (Sm³/d)",
+    f"{lifetime['peak_oil_rate']:,.0f}" if lifetime["peak_oil_rate"] is not None else "n/a",
+    help=(
+        f"Field-wide daily total, all wells summed, on {lifetime['peak_date']}."
+        if lifetime["peak_date"] is not None else "No oil-producing day recorded."
+    ),
+)
+k3.metric("Peak date", str(lifetime["peak_date"]) if lifetime["peak_date"] is not None else "n/a")
 
 k4, k5, k6 = st.columns(3)
-k4.metric("Field life", f"{lifetime['field_life_years']:.1f} years", help=f"{lifetime['first_record_date']} → {lifetime['last_record_date']}")
-k5.metric("Water injected (Sm³)", f"{lifetime['total_water_injection']:,.0f}")
+k4.metric(
+    "Field life",
+    f"{lifetime['field_life_years']:.1f} years" if lifetime["field_life_years"] is not None else "n/a",
+    help=(
+        f"{lifetime['first_record_date']} → {lifetime['last_record_date']}"
+        if lifetime["first_record_date"] is not None else "No records."
+    ),
+)
+k5.metric(
+    "Water injected (Sm³)",
+    f"{lifetime['total_water_injection']:,.0f}" if lifetime["total_water_injection"] is not None else "n/a",
+)
 k6.metric(
-    "Current/late active wells", f"{int(current_active['active_wells'])}",
-    help=f"As of {current_active['month_start'].strftime('%Y-%m')}, the last month with any well on-stream - "
-         "the field's last 3 recorded months show 0 active wells, a decommissioning tail, not a meaningful "
-         "\"current\" figure.",
+    "Current/late active wells", f"{int(current_active['active_wells'])}" if current_active is not None else "0",
+    help=(
+        f"As of {current_active['month_start'].strftime('%Y-%m')}, the last month with any well on-stream - "
+        "the field's last 3 recorded months show 0 active wells, a decommissioning tail, not a meaningful "
+        "\"current\" figure."
+    ) if current_active is not None else "No month with any active well recorded.",
 )
 st.caption(
     f"Also {lifetime['total_gas']:,.0f} Sm³ cumulative gas and {lifetime['total_water']:,.0f} Sm³ "
     "cumulative water produced."
+    if lifetime["total_gas"] is not None and lifetime["total_water"] is not None
+    else "No production data recorded."
 )
 st.caption(f"Source: `{q.VIEW_LIFETIME}`, `{q.VIEW_DAILY}`")
 

@@ -333,7 +333,7 @@ repeated here. Figures below are live output from `volve_analytics`.
 | A9 | Yearly oil contribution share per well? | `SUM() OVER (PARTITION BY year)` | Mix shifts materially year to year |
 | A10 | Active wells over time? | `count(DISTINCT ...) FILTER` | Ramps 0 → 7 → 0 across the field's lifecycle |
 | A11 | Shutdown/restart frequency? | `LAG()` + `CASE`, extended to full episodes | Highly variable; 15/9-F-4 leads at 124 events |
-| A12 | Does a new well change field rate? | Before/after window average | Field rate rises measurably after new wells start |
+| A12 | Does a new well change field monthly oil volume? | Before/after window average (Sm³/month) | Field monthly oil volume rises measurably after new wells start; producer vs. injector entries labeled separately |
 
 ### What the data-quality phase changed
 
@@ -404,9 +404,12 @@ sequence below via four Makefile targets (`make help` lists all of them,
 including `make load-fixture` - loads a tiny synthetic stand-in instead of
 the real workbook, so `make check`/`make app` have something to show
 without the licensed data). No local PostgreSQL install? `make docker-up`
-runs PostgreSQL 17 in Docker instead (`docker-compose.yml`) - export
-`PGHOST=localhost PGUSER=postgres` first, then every target above works
-unchanged. The manual sequence:
+runs PostgreSQL 17 in Docker instead (`docker-compose.yml` - bound to
+`127.0.0.1` only, password-authenticated; `export VOLVE_PG_PASSWORD=...`
+before starting it, then `export PGHOST=127.0.0.1 PGUSER=postgres
+PGPASSWORD=$VOLVE_PG_PASSWORD` and, once, `make docker-set-app-password` -
+see that file's header comment for the full sequence), then every target
+above works unchanged. The manual sequence:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -421,18 +424,47 @@ createdb volve_analytics   # or point to an existing empty database
 psql -d volve_analytics -f sql/01_create_schemas.sql
 psql -d volve_analytics -f sql/02_create_tables.sql
 python src/load_postgres.py
-psql -d volve_analytics -f sql/04_quality_checks.sql   # expect: 21 PASS, 6 REVIEW, 0 FAIL
+psql -d volve_analytics -v ON_ERROR_STOP=1 -f sql/04_quality_checks.sql   # expect: 21 PASS, 6 REVIEW, 0 FAIL, 0 SKIP - and exits non-zero on any FAIL
 psql -d volve_analytics -f sql/05_views.sql
+psql -d volve_analytics -f sql/08_load_provenance.sql  # load provenance + the dashboard's cache-revision view
 psql -d volve_analytics -f sql/06_analysis.sql
 psql -d volve_analytics -f sql/03_create_indexes.sql   # documentation + verification query only
 psql -d volve_analytics -f sql/07_app_role.sql
 streamlit run app/app.py   # http://localhost:8501 - see app/README.md
 ```
 
-`src/load_postgres.py` truncates and reloads inside a single transaction, so
-re-running any step is safe. `sql/04_quality_checks.sql` is the fastest way
-to confirm the database matches this README: it should report `27` total
-checks, `21` PASS, `6` REVIEW, `0` FAIL, `PASS WITH REVIEW` overall.
+`src/load_postgres.py` truncates and reloads inside a single transaction
+(serialized against any concurrent load by a bounded advisory lock - see
+that script's `_acquire_load_lock`), so re-running any step is safe. It also
+runs the daily/monthly reconciliation check itself before committing, so a
+load that would leave the database in a state `sql/04_quality_checks.sql`
+disagrees with never actually commits in the first place.
+`sql/04_quality_checks.sql` is the fastest way to confirm the database
+matches this README: it should report `27` total checks, `21` PASS, `6`
+REVIEW, `0` FAIL, `0` SKIP, `PASS WITH REVIEW` overall - and now genuinely
+fails (non-zero exit under `-v ON_ERROR_STOP=1`) if any check reports FAIL,
+not just when reporting it. `SKIP` appears instead of `FAIL` on the 11
+fixed-snapshot checks (row counts, known DQ population sizes) when the
+loaded dataset isn't the real 15,634-row snapshot those specific checks
+encode exact expected values for - e.g. `make load-fixture`'s tiny
+synthetic stand-in.
+
+### Backup and restore
+
+```bash
+pg_dump -Fc -d volve_analytics -f volve_analytics.dump   # backup (custom format)
+createdb volve_analytics_restored
+pg_restore -d volve_analytics_restored volve_analytics.dump   # restore
+psql -d volve_analytics_restored -v ON_ERROR_STOP=1 -f sql/04_quality_checks.sql   # verify: same PASS/REVIEW/FAIL/SKIP counts as the source
+```
+
+Verified end-to-end against a disposable local cluster (not the shared
+project database) as part of the 2026-09-09 security review remediation:
+backup, drop, restore, and `sql/04_quality_checks.sql` reported identical
+counts on the restored copy. No recovery-point/recovery-time objective is
+defined here - that is a deployment decision (retention schedule, where
+backups are stored, who can restore them) this repository does not make on
+its own; see "Production deployment prerequisites" below.
 
 ## 13. Repository structure
 
@@ -465,7 +497,7 @@ Volve_SQL/
 │   ├── 05_views.sql
 │   ├── 06_analysis.sql
 │   └── 07_app_role.sql
-├── tests/                       pytest suite (76 tests) - see tests/conftest.py
+├── tests/                       pytest suite (149 tests) - see tests/conftest.py
 │   ├── conftest.py
 │   ├── fixtures/generate_sample_workbook.py   tiny synthetic 2-well workbook
 │   ├── test_load_postgres.py
@@ -542,3 +574,67 @@ Volve_SQL/
   and temperature alongside on-stream hours, so this is a real signal, not
   new data collection. Needs a defined threshold for "reduced hours" and a
   decision on where it's surfaced (tooltip vs. table column) before building.
+
+## 17. Security posture and production deployment prerequisites
+
+A 2026-09-09 independent security/production-readiness review found this
+project solid for local, single-user use but not ready to share or deploy
+without further hardening. Every confirmed finding from that review has
+since been fixed and verified (see `docs/remediation_tracker.md` for the
+finding-by-finding record, evidence, and remaining limitations) - what
+follows is what is actually true of this codebase now, plus what a real
+deployment still has to decide for itself.
+
+**What is enforced today, independent of application code:**
+- `volve_app` (the dashboard's role) has zero grant on `core`/`raw` - a
+  database fact (`sql/07_app_role.sql`), not just an application
+  convention. `tests/test_privileges.py` proves this by connecting as
+  `volve_app` directly and asserting PostgreSQL itself refuses core/raw
+  reads and every write, independent of any application code ever calling
+  the right query.
+- "Ask the Data" generated SQL is validated by an explicit allowlisted
+  grammar (`app/nlsql.py`): exact view allowlist resolved per SQL scope
+  (not a flat CTE-name walk), an explicit function allowlist (not a
+  blocklist), and rejection of `SELECT INTO`/`FOR UPDATE`/`FOR SHARE`. It
+  then runs on a connection that is opened fresh, capped (short
+  `statement_timeout`/`lock_timeout` set at connection time, not by a
+  later `SET`), row/byte-bounded during fetch, and closed outright after
+  one use - never pooled, never shared with the dashboard's own queries,
+  bounded to a small number of concurrent in-flight questions.
+- `src/load_postgres.py` reconciles daily against monthly figures and runs
+  structural checks *inside* the load transaction, raising (and rolling
+  back the whole load) on any failure - not only as a separate,
+  non-blocking post-load report.
+- `make load-fixture`/`clean-fixture-db` refuse to run against a database
+  that already holds a wellbore code the fixture didn't put there.
+
+**What this repository does not decide for you, on purpose:**
+- **Authentication/access control in front of the dashboard.** Streamlit
+  itself has none built in. A shared deployment needs an
+  authenticating reverse proxy (or a Streamlit auth mechanism) in front of
+  it - this repository does not pick one, since that choice is tied to
+  whatever identity provider the deploying organization already uses.
+- **TLS for any remote database connection.** `docker-compose.yml` and the
+  Makefile's native-Postgres path are local-only (loopback-bound,
+  password-authenticated as of this review). A database reachable over a
+  real network needs `sslmode=verify-full` (or equivalent) end to end, and
+  should generally not have its port published to that network at all.
+- **`OLLAMA_HOST`.** Defaults to `http://localhost:11434` - genuinely
+  local unless explicitly overridden. If you do point it elsewhere, that
+  destination should be private (not open to the internet), and
+  everything this README says about "no data or schema leaves this
+  machine" stops being true the moment you do.
+- **Recovery objectives.** The "Backup and restore" procedure above is
+  verified to work; how often to run it, where backups are stored, and who
+  can restore them are deployment decisions, not something a portfolio
+  project's Makefile should assume on your behalf.
+- **Resource limits for a multi-user deployment.** `app/db.py`'s pool
+  sizes, row/byte budgets, and concurrency limits (all overridable via
+  `VOLVE_*` environment variables - see that file) were chosen for a
+  single-analyst workload on this dataset's size. Re-benchmark before
+  assuming they hold for materially more concurrent users or a
+  materially larger dataset.
+
+None of the above is invented or assumed complete by this repository - they
+are named explicitly as open decisions for whoever deploys this beyond a
+single developer's machine, rather than silently left unstated.

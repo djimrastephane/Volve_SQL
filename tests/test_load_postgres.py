@@ -206,3 +206,167 @@ class TestLoadedFixtureContent:
             )
             daily_oil_sum = cur.fetchone()[0]
         assert math.isclose(float(monthly_oil), float(daily_oil_sum), abs_tol=1e-6)
+
+
+class TestLoadProvenanceAndLock:
+    """Phase 4 foundation added alongside the security review remediation:
+    core.load_runs (sql/08_load_provenance.sql) and the bounded
+    transaction-scoped load lock (_acquire_load_lock)."""
+
+    def test_record_load_provenance_inserts_a_row(self, admin_write_conn, loaded_fixture, tmp_path):
+        with admin_write_conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('core.load_runs')")
+            if cur.fetchone()[0] is None:
+                pytest.skip("core.load_runs not present - sql/08_load_provenance.sql not applied")
+            cur.execute("SELECT count(*) FROM core.load_runs")
+            before = cur.fetchone()[0]
+        # An explicit, test-controlled file to hash - not load_postgres.py's
+        # WORKBOOK_PATH default (the real, gitignored licensed workbook),
+        # which does not exist in CI. record_load_provenance() takes
+        # workbook_path as a parameter specifically so this test doesn't
+        # have to depend on what happens to be on disk.
+        source_file = tmp_path / "synthetic_workbook.xlsx"
+        source_file.write_bytes(b"not a real workbook - only its path/hash matter here")
+        lp.record_load_provenance(
+            admin_write_conn,
+            {"daily_production": 20, "monthly_reference": 2, "wellbore": 2},
+            workbook_path=source_file,
+        )
+        with admin_write_conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM core.load_runs")
+            after = cur.fetchone()[0]
+        assert after == before + 1
+
+    def test_load_lock_blocks_a_concurrent_holder_and_times_out(self, admin_write_conn):
+        """One connection holds the advisory lock for the whole test (its
+        transaction is never committed - admin_write_conn rolls back in
+        teardown, releasing the lock automatically). A second, independent
+        connection attempting the same lock with a short timeout must fail
+        with LoadError, not hang."""
+        import os
+
+        import psycopg2
+
+        with admin_write_conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", (lp.LOAD_LOCK_KEY,))
+
+        conn2 = psycopg2.connect(dbname=os.environ.get("VOLVE_DB_NAME", "volve_analytics"))
+        try:
+            old_timeout = lp.LOAD_LOCK_TIMEOUT_S
+            lp.LOAD_LOCK_TIMEOUT_S = 1
+            try:
+                with pytest.raises(lp.LoadError, match="load lock"):
+                    lp._acquire_load_lock(conn2)
+            finally:
+                lp.LOAD_LOCK_TIMEOUT_S = old_timeout
+        finally:
+            conn2.rollback()
+            conn2.close()
+
+
+class TestDailyMonthlyReconciliation:
+    """Finding 5 of the 2026-09-09 security review: a successful load
+    never independently reconciled core.daily_production against
+    core.monthly_reference before committing, so a corrupted monthly
+    value with unchanged row counts could survive undetected. See
+    load_postgres._daily_monthly_reconciliation_checks, called from
+    validate_load() before every commit.
+    """
+
+    def test_passes_against_the_unmodified_fixture(self, admin_write_conn, loaded_fixture):
+        checks = lp._daily_monthly_reconciliation_checks(admin_write_conn)
+        failed = [name for name, passed, _ in checks if not passed]
+        assert failed == []
+
+    def test_detects_a_corrupted_monthly_value_with_unchanged_row_counts(self, admin_write_conn, loaded_fixture):
+        """The audit's exact acceptance case: change one monthly value,
+        touch no rows in either table - row counts alone could never
+        catch this, only reconciling values does."""
+        with admin_write_conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM core.monthly_reference")
+            before_count = cur.fetchone()[0]
+            cur.execute(
+                "UPDATE core.monthly_reference SET oil_vol = oil_vol + 9999 "
+                "WHERE npd_well_bore_code = %s",
+                (FIXTURE_WELL_A_CODE,),
+            )
+            cur.execute("SELECT count(*) FROM core.monthly_reference")
+            after_count = cur.fetchone()[0]
+        assert before_count == after_count  # row count is unchanged - the whole point of this case
+
+        checks = lp._daily_monthly_reconciliation_checks(admin_write_conn)
+        results = {name: passed for name, passed, _ in checks}
+        assert results["Daily/monthly reconciliation: oil/gas/water/water-injection sums match (tolerance 0.000001)"] is False
+
+    def test_detects_a_monthly_group_missing_from_daily(self, admin_write_conn, loaded_fixture):
+        """An unexpected missing monthly group: monthly_reference holds a
+        (wellbore, year, month) with no corresponding daily rows at all."""
+        with admin_write_conn.cursor() as cur:
+            cur.execute(
+                "UPDATE core.monthly_reference SET reference_month = 2 "
+                "WHERE npd_well_bore_code = %s AND reference_month = 1",
+                (FIXTURE_WELL_A_CODE,),
+            )
+        checks = lp._daily_monthly_reconciliation_checks(admin_write_conn)
+        results = {name: passed for name, passed, _ in checks}
+        assert results[
+            "Daily/monthly reconciliation: (wellbore, year, month) groups in daily but not monthly_reference"
+        ] is False
+        assert results[
+            "Daily/monthly reconciliation: (wellbore, year, month) groups in monthly_reference but not daily"
+        ] is False
+
+
+class TestFixtureSafetyGuard:
+    """Finding 11 of the 2026-09-09 security review: `make load-fixture`
+    must refuse to truncate/reload a database that already holds a
+    non-fixture wellbore, rather than silently replacing a populated
+    real-data database's contents with 20 fixture rows. See
+    load_postgres._refuse_unless_fixture_target_is_disposable.
+    """
+
+    def test_disabled_by_default(self, admin_write_conn):
+        """enabled=False (the default when VOLVE_FIXTURE_LOAD is unset) -
+        `make load`, not `make load-fixture` - must never apply this
+        check, even against a database holding arbitrary content."""
+        lp._refuse_unless_fixture_target_is_disposable(admin_write_conn, enabled=False)
+
+    def test_allows_an_empty_wellbore_table(self, admin_write_conn, loaded_fixture):
+        """Deliberately empties core.wellbore WITHIN admin_write_conn's
+        own never-committed transaction (see conftest.py) rather than
+        relying on the database incidentally already being empty (which
+        it never is once the fixture is loaded, the only way this suite
+        runs against a real database - a skip-if-not-empty version of
+        this test would always skip in that environment, which is
+        exactly the kind of "unexpected skip" finding 13 of the
+        2026-09-09 security review flags CI for silently accepting)."""
+        with admin_write_conn.cursor() as cur:
+            cur.execute("DELETE FROM core.daily_production")
+            cur.execute("DELETE FROM core.monthly_reference")
+            cur.execute("DELETE FROM core.wellbore")
+            cur.execute("SELECT count(*) FROM core.wellbore")
+            assert cur.fetchone()[0] == 0
+        lp._refuse_unless_fixture_target_is_disposable(admin_write_conn, enabled=True)
+
+    def test_allows_the_fixtures_own_wellbore_codes(self, admin_write_conn, loaded_fixture):
+        """loaded_fixture already guarantees core.wellbore holds exactly
+        the fixture's own 2 codes - the guard must not refuse this,
+        or `make load-fixture` could never run twice."""
+        lp._refuse_unless_fixture_target_is_disposable(admin_write_conn, enabled=True)
+
+    def test_refuses_when_a_non_fixture_wellbore_is_present(self, admin_write_conn):
+        """Simulates the exact scenario the review flagged: a database
+        holding a wellbore code the fixture never loaded (stand-in for
+        the real dataset's 5351/5599/... codes). admin_write_conn is
+        rolled back in teardown (conftest.py), so this insert never
+        actually reaches any other test's view of the database."""
+        with admin_write_conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO core.wellbore (
+                    npd_well_bore_code, npd_well_bore_name, well_bore_code,
+                    npd_field_code, npd_field_name, npd_facility_code, npd_facility_name
+                ) VALUES (5351, 'REAL-WELL', 'WB-5351', 1, 'VOLVE', 1, 'FAC')
+                ON CONFLICT (npd_well_bore_code) DO NOTHING
+            """)
+        with pytest.raises(lp.LoadError, match="wellbore code"):
+            lp._refuse_unless_fixture_target_is_disposable(admin_write_conn, enabled=True)

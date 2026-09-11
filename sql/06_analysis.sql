@@ -319,7 +319,9 @@ SELECT
     wellbore_name,
     shutdown_date,
     restart_date,
-    offline_days,
+    elapsed_span_days,
+    observed_inactive_days,
+    unknown_days,
     oil_before,
     oil_after,
     recovery_pct
@@ -336,6 +338,21 @@ ORDER BY wellbore_name, shutdown_date;
 -- 3-month field-oil averages are computed once, over every month, using a
 -- window frame (ROWS BETWEEN), then looked up for each wellbore's entry
 -- month - not recomputed per wellbore via a correlated subquery.
+--
+-- avg_field_oil_3mo_before/after and field_oil_entry_month are MEAN
+-- MONTHLY VOLUMES (Sm3/month, vw_field_monthly_summary.oil_volume summed
+-- over a calendar month) - column names say so explicitly, and so must
+-- any narrative referencing them (docs/engineering_findings.md), after a
+-- 2026-09-09 security review found the write-up mislabeling this figure
+-- as a daily rate (Sm3/day), understating the true monthly volume by
+-- roughly 30x. entry_reason distinguishes a producer's entry (first oil)
+-- from an injector's (first water injection, no oil ever) - 15/9-F-4 is
+-- a pure injector and must never be read as "a new producer" from this
+-- output. months_with_data_before/after count how many of the 3 ROWS
+-- PRECEDING/FOLLOWING actually had a non-NULL oil_volume - AVG() ignores
+-- NULL months silently, so a wellbore entering near a reporting gap could
+-- otherwise show a "3-month average" quietly computed from fewer months
+-- with no indication of it.
 -- -----------------------------------------------------------------------------
 WITH field_monthly AS (
     SELECT
@@ -345,31 +362,49 @@ WITH field_monthly AS (
             ORDER BY month_start
             ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING
         ) AS trailing_3mo_avg_oil,
+        COUNT(oil_volume) OVER (
+            ORDER BY month_start
+            ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING
+        ) AS months_with_data_before,
         AVG(oil_volume) OVER (
             ORDER BY month_start
             ROWS BETWEEN 1 FOLLOWING AND 3 FOLLOWING
-        ) AS following_3mo_avg_oil
+        ) AS following_3mo_avg_oil,
+        COUNT(oil_volume) OVER (
+            ORDER BY month_start
+            ROWS BETWEEN 1 FOLLOWING AND 3 FOLLOWING
+        ) AS months_with_data_after
     FROM analytics.vw_field_monthly_summary
 ),
 wellbore_entry AS (
-    SELECT
-        npd_well_bore_code,
-        MAKE_DATE(
-            EXTRACT(YEAR FROM MIN(production_date))::int,
-            EXTRACT(MONTH FROM MIN(production_date))::int,
-            1
-        ) AS entry_month_start
+    SELECT npd_well_bore_code, MIN(production_date) AS entry_date
     FROM core.daily_production
     WHERE bore_oil_vol > 0 OR bore_wi_vol > 0
     GROUP BY npd_well_bore_code
+),
+wellbore_entry_detail AS (
+    SELECT
+        e.npd_well_bore_code,
+        DATE_TRUNC('month', e.entry_date)::date AS entry_month_start,
+        CASE
+            WHEN dp.bore_oil_vol > 0 AND dp.bore_wi_vol > 0 THEN 'first_oil_and_water_injection'
+            WHEN dp.bore_oil_vol > 0 THEN 'first_oil'
+            WHEN dp.bore_wi_vol > 0 THEN 'first_water_injection'
+        END AS entry_reason
+    FROM wellbore_entry e
+    JOIN core.daily_production dp
+        ON dp.npd_well_bore_code = e.npd_well_bore_code AND dp.production_date = e.entry_date
 )
 SELECT
     w.npd_well_bore_name AS wellbore_name,
-    e.entry_month_start,
-    fm.trailing_3mo_avg_oil  AS avg_field_oil_3mo_before,
-    fm.oil_volume             AS field_oil_entry_month,
-    fm.following_3mo_avg_oil AS avg_field_oil_3mo_after
-FROM wellbore_entry e
-JOIN core.wellbore w ON w.npd_well_bore_code = e.npd_well_bore_code
-JOIN field_monthly fm ON fm.month_start = e.entry_month_start
-ORDER BY e.entry_month_start;
+    ed.entry_month_start,
+    ed.entry_reason,
+    fm.trailing_3mo_avg_oil  AS avg_field_oil_3mo_before_sm3_per_month,
+    fm.months_with_data_before,
+    fm.oil_volume             AS field_oil_entry_month_sm3_per_month,
+    fm.following_3mo_avg_oil AS avg_field_oil_3mo_after_sm3_per_month,
+    fm.months_with_data_after
+FROM wellbore_entry_detail ed
+JOIN core.wellbore w ON w.npd_well_bore_code = ed.npd_well_bore_code
+JOIN field_monthly fm ON fm.month_start = ed.entry_month_start
+ORDER BY ed.entry_month_start;

@@ -26,6 +26,85 @@ import pytest
 import nlsql
 
 
+class _FakeResponse:
+    """Minimal stand-in for requests.Response - only what generate_sql
+    actually touches (raise_for_status, json)."""
+
+    def __init__(self, json_result=None, json_error=None):
+        self._json_result = json_result
+        self._json_error = json_error
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        if self._json_error is not None:
+            raise self._json_error
+        return self._json_result
+
+
+class TestGenerateSqlInputOutputGuards:
+    """Finding 4/14 of the 2026-09-09 security review: neither the
+    question nor the model's raw output had an explicit size bound, and
+    the response envelope (resp.json()["response"]) was read with no
+    guard for a malformed body - any of which crashed the page instead of
+    raising the application's own NLSQLError. No real Ollama server is
+    contacted here - requests.post is monkeypatched to return a
+    _FakeResponse, isolating these guards from the network call itself.
+    """
+
+    def test_rejects_empty_question(self):
+        with pytest.raises(nlsql.NLSQLError, match="empty"):
+            nlsql.generate_sql("   ")
+
+    def test_rejects_question_over_the_length_limit(self):
+        with pytest.raises(nlsql.NLSQLError, match="character limit"):
+            nlsql.generate_sql("x" * (nlsql.MAX_QUESTION_CHARS + 1))
+
+    def test_rejects_non_json_response_body(self, monkeypatch):
+        monkeypatch.setattr(
+            nlsql.requests, "post",
+            lambda *a, **k: _FakeResponse(json_error=ValueError("not json")),
+        )
+        with pytest.raises(nlsql.NLSQLError, match="not valid JSON"):
+            nlsql.generate_sql("Which well produced the most oil?")
+
+    def test_rejects_response_envelope_missing_response_key(self, monkeypatch):
+        monkeypatch.setattr(
+            nlsql.requests, "post",
+            lambda *a, **k: _FakeResponse(json_result={"unexpected": "shape"}),
+        )
+        with pytest.raises(nlsql.NLSQLError, match='"response" field'):
+            nlsql.generate_sql("Which well produced the most oil?")
+
+    def test_rejects_response_value_that_is_not_a_string(self, monkeypatch):
+        monkeypatch.setattr(
+            nlsql.requests, "post",
+            lambda *a, **k: _FakeResponse(json_result={"response": {"nested": "object"}}),
+        )
+        with pytest.raises(nlsql.NLSQLError, match='"response" field'):
+            nlsql.generate_sql("Which well produced the most oil?")
+
+    def test_rejects_oversized_model_output(self, monkeypatch):
+        huge = "SELECT 1 " + ("x" * nlsql.MAX_MODEL_OUTPUT_CHARS)
+        monkeypatch.setattr(
+            nlsql.requests, "post",
+            lambda *a, **k: _FakeResponse(json_result={"response": huge}),
+        )
+        with pytest.raises(nlsql.NLSQLError, match="character limit"):
+            nlsql.generate_sql("Which well produced the most oil?")
+
+    def test_accepts_a_well_formed_response(self, monkeypatch):
+        monkeypatch.setattr(
+            nlsql.requests, "post",
+            lambda *a, **k: _FakeResponse(
+                json_result={"response": "SELECT wellbore_name FROM analytics.vw_well_lifetime_summary"}
+            ),
+        )
+        sql = nlsql.generate_sql("Which well produced the most oil?")
+        assert sql == "SELECT wellbore_name FROM analytics.vw_well_lifetime_summary"
+
+
 class TestValidateSql:
     def test_accepts_plain_select(self):
         nlsql._validate_sql("SELECT wellbore_name FROM analytics.vw_well_lifetime_summary")
@@ -136,6 +215,110 @@ class TestValidateSql:
         schema-qualified analytics.vw_... reference does."""
         sql = "WITH vw_well_lifetime_summary AS (SELECT 1 AS x) SELECT x FROM vw_well_lifetime_summary"
         nlsql._validate_sql(sql)
+
+
+class TestCteScopeAdversarial:
+    """Finding 3 of the 2026-09-09 security review: the old CTE-name
+    collector walked the whole tree for any exp.CTE, so an inner CTE's
+    name shadowed an outer, unrelated reference to a real relation with
+    the same name - accepted below by the validator this replaces. Each
+    case here was independently confirmed against the *new*, scope-aware
+    _table_refs() (sqlglot.optimizer.scope.build_scope), not just
+    against what the old flat walk would have done.
+    """
+
+    def test_inner_cte_does_not_shadow_an_outer_reference_to_the_same_name(self):
+        """The review's own example: an inner WITH's pg_roles CTE is not
+        visible to the outer SELECT - PostgreSQL resolves the outer
+        reference as the real pg_catalog table, and so must this
+        validator, refusing it as an unresolved non-analytics reference."""
+        sql = "WITH x AS (WITH pg_roles AS (SELECT 1) SELECT 1) SELECT rolname FROM pg_roles"
+        with pytest.raises(nlsql.NLSQLError, match="not one of the allowed analytics views"):
+            nlsql._validate_sql(sql)
+
+    def test_sibling_cte_reference_is_in_scope(self):
+        """A CTE may reference an earlier sibling in the same WITH list -
+        ordinary, legal SQL that must keep validating."""
+        sql = "WITH a AS (SELECT 1 AS x), b AS (SELECT x FROM a) SELECT x FROM b"
+        nlsql._validate_sql(sql)
+
+    def test_forward_reference_to_a_later_sibling_cte_is_rejected(self):
+        """A CTE referencing a sibling defined LATER in the same WITH list
+        is not legal PostgreSQL (outside RECURSIVE) - real PostgreSQL
+        resolves that name as an external relation lookup and fails if
+        one doesn't exist. The validator must reject it the same way, not
+        treat it as an in-scope CTE reference just because a same-named
+        CTE happens to exist elsewhere in the statement."""
+        sql = "WITH a AS (SELECT x FROM b), b AS (SELECT 1 AS x) SELECT * FROM a"
+        with pytest.raises(nlsql.NLSQLError, match="not one of the allowed analytics views"):
+            nlsql._validate_sql(sql)
+
+    def test_recursive_cte_referencing_only_itself_validates(self):
+        """A RECURSIVE CTE legitimately references its own name inside its
+        own body - must not be mistaken for an external reference."""
+        sql = "WITH RECURSIVE r AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM r WHERE n < 5) SELECT n FROM r"
+        nlsql._validate_sql(sql)
+
+    def test_nested_cte_visible_to_its_own_enclosing_query(self):
+        """Contrast with test_inner_cte_does_not_shadow_an_outer_reference:
+        a nested CTE IS in scope for the query that actually encloses it."""
+        sql = "WITH x AS (WITH y AS (SELECT 1 AS n) SELECT n FROM y) SELECT n FROM x"
+        nlsql._validate_sql(sql)
+
+
+class TestFunctionAllowlist:
+    """Finding 2 of the 2026-09-09 security review: the old validator
+    placed no restriction on which functions a generated statement could
+    call. Each bypass example quoted in that finding is reproduced here,
+    confirmed rejected by the new allowlist-based check
+    (_validate_functions), not a blocklist of these specific names."""
+
+    @pytest.mark.parametrize("sql", [
+        "SELECT set_config('statement_timeout', '0', false)",
+        "SELECT set_config('default_transaction_read_only', 'off', false)",
+        "SELECT pg_advisory_lock(12345)",
+        "SELECT query_to_xml('SELECT * FROM pg_catalog.pg_roles', true, false, '')",
+    ])
+    def test_rejects_the_reviews_accepted_bypass_examples(self, sql):
+        with pytest.raises(nlsql.NLSQLError, match="not on the allowed function list"):
+            nlsql._validate_sql(sql)
+
+    def test_rejects_repeat_huge_single_row_payload(self):
+        """A single-row result can still be huge even with a row cap -
+        this function is refused outright, not relied on to be caught by
+        a later byte budget."""
+        with pytest.raises(nlsql.NLSQLError, match="not on the allowed function list"):
+            nlsql._validate_sql("SELECT repeat('x', 100000000)")
+
+    def test_rejects_unknown_anonymous_function(self):
+        with pytest.raises(nlsql.NLSQLError, match="not on the allowed function list"):
+            nlsql._validate_sql("SELECT pg_sleep(5)")
+
+    def test_accepts_make_date_the_one_allowlisted_anonymous_function(self):
+        nlsql._validate_sql("SELECT make_date(2020, 1, 1)")
+
+    def test_accepts_date_trunc(self):
+        nlsql._validate_sql(
+            "SELECT date_trunc('month', production_date) FROM analytics.vw_daily_well_performance"
+        )
+
+    def test_accepts_and_or_boolean_connectives(self):
+        """AND/OR are modeled as exp.Func subclasses by sqlglot (they are
+        technically n-ary callables in its type hierarchy) but are not a
+        callable server-side function name - must not be caught by the
+        function allowlist."""
+        nlsql._validate_sql(
+            "SELECT * FROM analytics.vw_daily_well_performance "
+            "WHERE bore_oil_vol > 0 AND (on_stream_hrs > 0 OR on_stream_hrs IS NULL)"
+        )
+
+    def test_rejects_select_into(self):
+        with pytest.raises(nlsql.NLSQLError, match="SELECT INTO"):
+            nlsql._validate_sql("SELECT * INTO evil FROM analytics.vw_daily_well_performance")
+
+    def test_rejects_for_update(self):
+        with pytest.raises(nlsql.NLSQLError, match="row lock"):
+            nlsql._validate_sql("SELECT * FROM analytics.vw_daily_well_performance FOR UPDATE")
 
 
 class TestCleanSql:

@@ -669,7 +669,7 @@ def _source_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def record_load_provenance(conn, core_counts: dict) -> None:
+def record_load_provenance(conn, core_counts: dict, workbook_path: Path = WORKBOOK_PATH) -> None:
     """Inserts one row into core.load_runs, in the SAME transaction as
     the load itself - committed together or rolled back together, so a
     row here always corresponds to data that really did become the live
@@ -677,6 +677,19 @@ def record_load_provenance(conn, core_counts: dict) -> None:
     sql/08_load_provenance.sql). Silently skipped, not fatal, if that
     table doesn't exist yet (a database that hasn't applied that
     migration) - provenance is additive, not a load precondition.
+
+    workbook_path defaults to the module-level WORKBOOK_PATH (what
+    main() actually loaded) but is an explicit parameter, not an
+    implicit read of that global, specifically so a caller (a test, or
+    any future script reusing this function) can pass its own path
+    instead of depending on process-wide state resolved once at import
+    time from an environment variable. A CI failure caught exactly this:
+    a test calling this function directly, without going through
+    main(), silently fell back to the real (gitignored, CI-absent)
+    workbook path and failed with FileNotFoundError - not because the
+    function was wrong for its real call site, but because reaching
+    into module state instead of taking a parameter made it impossible
+    to call correctly from anywhere else.
     """
     with conn.cursor() as cur:
         cur.execute("SELECT to_regclass('core.load_runs')")
@@ -692,7 +705,7 @@ def record_load_provenance(conn, core_counts: dict) -> None:
             RETURNING load_id
             """,
             (
-                str(WORKBOOK_PATH), _source_sha256(WORKBOOK_PATH),
+                str(workbook_path), _source_sha256(workbook_path),
                 core_counts["daily_production"], core_counts["monthly_reference"],
                 core_counts["wellbore"],
             ),

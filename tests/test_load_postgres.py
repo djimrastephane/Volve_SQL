@@ -213,16 +213,25 @@ class TestLoadProvenanceAndLock:
     core.load_runs (sql/08_load_provenance.sql) and the bounded
     transaction-scoped load lock (_acquire_load_lock)."""
 
-    def test_record_load_provenance_inserts_a_row(self, admin_write_conn, loaded_fixture):
+    def test_record_load_provenance_inserts_a_row(self, admin_write_conn, loaded_fixture, tmp_path):
         with admin_write_conn.cursor() as cur:
             cur.execute("SELECT to_regclass('core.load_runs')")
             if cur.fetchone()[0] is None:
                 pytest.skip("core.load_runs not present - sql/08_load_provenance.sql not applied")
             cur.execute("SELECT count(*) FROM core.load_runs")
             before = cur.fetchone()[0]
-        lp.record_load_provenance(admin_write_conn, {
-            "daily_production": 20, "monthly_reference": 2, "wellbore": 2,
-        })
+        # An explicit, test-controlled file to hash - not load_postgres.py's
+        # WORKBOOK_PATH default (the real, gitignored licensed workbook),
+        # which does not exist in CI. record_load_provenance() takes
+        # workbook_path as a parameter specifically so this test doesn't
+        # have to depend on what happens to be on disk.
+        source_file = tmp_path / "synthetic_workbook.xlsx"
+        source_file.write_bytes(b"not a real workbook - only its path/hash matter here")
+        lp.record_load_provenance(
+            admin_write_conn,
+            {"daily_production": 20, "monthly_reference": 2, "wellbore": 2},
+            workbook_path=source_file,
+        )
         with admin_write_conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM core.load_runs")
             after = cur.fetchone()[0]
